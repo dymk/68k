@@ -1,15 +1,18 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-// shift register pin defines
-#define SR_CLK 2
+#define SR_CLK   2
 #define SR_LATCH 3
-#define SR_DATA 4
+#define SR_DATA  4
 
-// control lines for the flash chip
-#define CS A0
-#define RD A1
-#define WR A2
+// chan 2 in debugger
+#define CS A2
+// chan 1
+#define RD A3
+// chan 0
+#define WR A5
+
+#define DEBUG 0
 
 /*
 first SR:
@@ -39,12 +42,12 @@ third SR:
 */
 
 void _printf(char *fmt, ... ){
-  char buf[128]; // resulting string limited to 128 chars
-  va_list args;
-  va_start (args, fmt );
-  vsnprintf(buf, 128, fmt, args);
-  va_end (args);
-  Serial.print(buf);
+        char buf[128]; // resulting string limited to 128 chars
+        va_list args;
+        va_start (args, fmt );
+        vsnprintf(buf, 128, fmt, args);
+        va_end (args);
+        Serial.print(buf);
 }
 
 enum {
@@ -69,6 +72,7 @@ int getCh() {
        return 0;
      }
   }
+
   return Serial.read();
 }
 
@@ -124,6 +128,7 @@ uint32_t readint() {
     return (((uint32_t)readshort()) << 8) | readshort();
 }
 
+<<<<<<< HEAD
 
 // change the DDR of the databus
 void make_dbus_output() {
@@ -136,6 +141,8 @@ void make_dbus_input() {
 }
 
 // Sets the address bus
+=======
+>>>>>>> c78db2b6db8c4c2242a8e55d16ca277bc5f0ecc8
 void set_address(uint32_t addr) {
 #if DEBUG
   Serial.print("Setting address to: 0x");
@@ -190,7 +197,7 @@ void set_data(uint8_t data) {
   make_dbus_output();
 
   PORTB = data & 0x3F;
-  PORTC = (data >> 6) & 0x3;
+  PORTC = (PORTC & 0xFC) | ((data >> 6) & 0x3);
 }
 
 // Reads a byte from the databus
@@ -203,19 +210,38 @@ uint8_t read_data() {
   return ret;
 }
 
-// Read the data at address 'addr'
-uint8_t do_read(uint32_t addr) {
+void do_write(uint32_t addr,byte b) {
   set_address(addr);
+  asm("nop");
 
   digitalWrite(CS, LOW);
-  digitalWrite(RD, LOW);
-  asm("nop\nnop\n");
+  digitalWrite(WR, LOW);
+  asm("nop");
 
-  uint8_t ret = read_data();
+  set_data(b);
+  asm("nop");
+
+  digitalWrite(WR, HIGH);
   digitalWrite(CS, HIGH);
-  digitalWrite(RD, HIGH);
+  asm("nop");
+}
 
-  return ret;
+uint8_t do_read(uint32_t addr) {
+  char data;
+
+  set_address(addr);
+  asm("nop");
+
+  digitalWrite(CS,0);
+  digitalWrite(RD,0);
+  asm("nop");
+
+  data = read_data();
+  digitalWrite(RD,1);
+  digitalWrite(CS,1);
+  asm("nop");
+
+  return data;
 }
 
 void write_byte(uint32_t addr, uint8_t b) {
@@ -264,7 +290,7 @@ uint8_t chip_erase() {
   do_write(0x2AAA,0x55);
   do_write(0x5555,0x10);
 
-  delay(100);
+  delay(500);
   return 1;
 }
 
@@ -277,16 +303,21 @@ void setup() {
   pinMode(SR_LATCH, OUTPUT);
   pinMode(SR_DATA, OUTPUT);
 
-  pinMode(CS, OUTPUT);
-  pinMode(RD, OUTPUT);
-  pinMode(WR, OUTPUT);
-
   // disable flash chip
   digitalWrite(CS, HIGH);
   digitalWrite(RD, HIGH);
   digitalWrite(WR, HIGH);
-}
 
+  pinMode(CS, OUTPUT);
+  pinMode(RD, OUTPUT);
+  pinMode(WR, OUTPUT);
+
+  make_dbus_input();
+
+  // sanity checks
+  if(sizeof(uint16_t) != 2)
+    Serial.println("uint16_t is not 2 bytes");
+}
 
 void do_dump (uint32_t addr, uint32_t cnt) {
   int c = 0;
