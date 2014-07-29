@@ -3,3 +3,8 @@
 *.sublime-workspace
 /flashtool/flashtool
 *.o
+tests/
+
+# Ignored binary files
+uploader/uploader
+initial-flasher/host-flashtool/flashtool

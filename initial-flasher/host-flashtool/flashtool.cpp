@@ -16,6 +16,8 @@ int sergetc(int fd);
 int serputc(int fd, char c);
 void serflush(int fd);
 
+void ser_expect(int fd, int chr);
+
 // find the next block of 0xFF
 int find_next_block(byte * data, int addr, int size, int maxchunk);
 
@@ -112,12 +114,13 @@ int main (int argc, char ** argv) {
     printf("OK\n");
 
     if (fd <= 0) {
-        printf("Failed to open %s\n");
+        printf("Failed to open %s\n", port_def);
         return 1;
     }
 
     // must send first to be able to read
     serputc(fd,'H');
+    sleep(2);
 
     // remove any pending characters
     serflush(fd);
@@ -131,11 +134,10 @@ int main (int argc, char ** argv) {
 
     serputc(fd,'H');
 
-    // ensure we are in a known state
-    if (sergetc(fd) != 'T' || sergetc(fd) != OKAY|| sergetc(fd) != READY) {
-        printf("Sync error\n");
-        return 0;
-    }
+    // sync
+    ser_expect(fd, 'T');
+    ser_expect(fd, OKAY);
+    ser_expect(fd, READY);
 
     printf("OK\n");
 
@@ -321,6 +323,15 @@ int program_chip(int fd, char * filename, bool erase_only) {
     return 0;
 }
 
+// For expecting a certain response from the device
+void ser_expect(int fd, int chr) {
+    int got = sergetc(fd);
+    if(got != chr) {
+        fprintf(stderr, "Expected '%c' from flasher, got '%c'\n", chr, got);
+        exit(1);
+    }
+}
+
 // find next block of 0xFF data
 int find_next_block(byte * data, int addr, int size, int maxchunk) {
     int chz = 1;
@@ -365,8 +376,8 @@ uint16_t crc16_update(uint16_t crc, uint8_t a) {
 }
 
 int serputc(int fd, char c) {
-    if (write(fd, &c, 1) != 1) {
-        printf("Serial write failed");
+    if (write(fd, &c, sizeof(c)) != 1) {
+        perror("Serial write failed");
         exit(1);
     }
     return 1;
@@ -377,14 +388,14 @@ int serputc(int fd, char c) {
 void serflush(int fd) {
     char ch;
     sleep(1);
-    while (read(fd, &ch, 1) > 0);
+    while (read(fd, &ch, 1) > 0) fprintf(stderr, "Flush from device: '%c'\n", ch);
 }
 
 
 int sergetc(int fd) {
     char ch;
     if (1 != read(fd, &ch, 1)) {
-        printf("Serial read failed\n");
+        perror("Serial read failed");
         exit(1);
     }
     return ch;
@@ -398,7 +409,7 @@ void serprintf(int fd, const char *fmt, ... ){
     va_end (args);
 
     if (write(fd, &buf,l) != l) {
-        printf("Failed to write entire buffer\n");
+        perror("Failed to write entire buffer");
         exit (1);
     }
 }

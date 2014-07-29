@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 
+
 #define SR_CLK   2
 #define SR_LATCH 3
 #define SR_DATA  4
@@ -11,35 +12,6 @@
 #define RD A3
 // chan 0
 #define WR A5
-
-#define DEBUG 0
-
-/*
-first SR:
-5 => 18
-6 => 17
-7 => 16
-
-second SR:
-0 => 15
-1 => 14
-2 => 13
-3 => 12
-4 => 11
-5 => 10
-6 => 9
-7 => 8
-
-third SR:
-0 => 7
-1 => 6
-2 => 5
-3 => 4
-4 => 3
-5 => 2
-6 => 1
-7 => 0
-*/
 
 void _printf(char *fmt, ... ){
         char buf[128]; // resulting string limited to 128 chars
@@ -65,14 +37,16 @@ uint8_t error = 0;
 
 int getCh() {
   if (error) return 0;
+  digitalWrite(6,1);
   uint32_t st = millis();
   while (!Serial.available())  {
      if (millis() - st > 1000) {
        error = TIMEOUT;
+       digitalWrite(6,0);
        return 0;
      }
   }
-
+  digitalWrite(6,0);
   return Serial.read();
 }
 
@@ -128,8 +102,6 @@ uint32_t readint() {
     return (((uint32_t)readshort()) << 8) | readshort();
 }
 
-<<<<<<< HEAD
-
 // change the DDR of the databus
 void make_dbus_output() {
   DDRB |= 0x3F; // 0b111111
@@ -141,14 +113,7 @@ void make_dbus_input() {
 }
 
 // Sets the address bus
-=======
->>>>>>> c78db2b6db8c4c2242a8e55d16ca277bc5f0ecc8
 void set_address(uint32_t addr) {
-#if DEBUG
-  Serial.print("Setting address to: 0x");
-  Serial.println(addr, HEX);
-#endif
-
   // bring latch low
   digitalWrite(SR_LATCH, LOW);
 
@@ -167,22 +132,6 @@ void set_address(uint32_t addr) {
   digitalWrite(SR_CLK, LOW);
   digitalWrite(SR_LATCH, HIGH);
   digitalWrite(SR_LATCH, LOW);
-
-  Serial.println("");
-}
-
-void do_write(uint32_t addr,byte b) {
-  set_address(addr);
-  set_data(b);
-
-  digitalWrite(CS, 0);
-  digitalWrite(WR, 0);
-
-  digitalWrite(WR, 1);
-  digitalWrite(CS, 1);
-
-  // avoid both devices driving the databus
-  make_dbus_input();
 }
 
 // Sets 'data' to the databus
@@ -190,10 +139,6 @@ void set_data(uint8_t data) {
   // lower 6 bits is PORTB0-5,
   // upper nibble is PORTC0-3
 
-#if DEBUG
-  Serial.print("Writing to data: 0x");
-  Serial.println(data, HEX);
-#endif
   make_dbus_output();
 
   PORTB = data & 0x3F;
@@ -212,34 +157,29 @@ uint8_t read_data() {
 
 void do_write(uint32_t addr,byte b) {
   set_address(addr);
-  asm("nop");
-
-  digitalWrite(CS, LOW);
-  digitalWrite(WR, LOW);
-  asm("nop");
-
   set_data(b);
-  asm("nop");
 
-  digitalWrite(WR, HIGH);
-  digitalWrite(CS, HIGH);
-  asm("nop");
+  digitalWrite(CS, 0);
+  digitalWrite(WR, 0);
+
+  digitalWrite(WR, 1);
+  digitalWrite(CS, 1);
+
+  // avoid both devices driving the databus
+  make_dbus_input();
 }
 
 uint8_t do_read(uint32_t addr) {
   char data;
 
   set_address(addr);
-  asm("nop");
 
   digitalWrite(CS,0);
   digitalWrite(RD,0);
-  asm("nop");
 
   data = read_data();
   digitalWrite(RD,1);
   digitalWrite(CS,1);
-  asm("nop");
 
   return data;
 }
@@ -290,7 +230,7 @@ uint8_t chip_erase() {
   do_write(0x2AAA,0x55);
   do_write(0x5555,0x10);
 
-  delay(500);
+  delay(100);
   return 1;
 }
 
@@ -313,10 +253,6 @@ void setup() {
   pinMode(WR, OUTPUT);
 
   make_dbus_input();
-
-  // sanity checks
-  if(sizeof(uint16_t) != 2)
-    Serial.println("uint16_t is not 2 bytes");
 }
 
 void do_dump (uint32_t addr, uint32_t cnt) {

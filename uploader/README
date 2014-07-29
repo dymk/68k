@@ -1,0 +1,5 @@
+Driver program for controlling bootloader (loader-C).
+
+100% backwards compatible with original 'strapper' loader.
+
+Taken from ZZJ's 68k project: https://github.com/ZigZagJoe/68k
