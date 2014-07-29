@@ -60,7 +60,7 @@
 // provided by parse_srec.c
 uint8_t parseSREC(uint8_t * buffer, uint32_t buffer_len, uint8_t fl, uint8_t armed);
 
-#include <srec_private.h>
+#include "srec_private.h"
 
 #endif
 

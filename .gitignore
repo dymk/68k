@@ -2,8 +2,14 @@
 *.sublime-project
 *.sublime-workspace
 /flashtool/flashtool
-*.o
 tests/
+
+*.o
+*.a
+*.l68
+*.s68
+*.map
+/projects/progs/**/*.bin
 
 # Ignored binary files
 uploader/uploader

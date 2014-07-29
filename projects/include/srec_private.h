@@ -15,7 +15,7 @@ extern uint8_t MEMORY[0x100000];
 // flash simulation
 #define flash_write_byte(A,V)  MEMORY[A] = V
 #define MEM(X)                 MEMORY[X]
-#define ADDR_TO_SECTOR(X)      (((X) & 0x3FFFF) >> 12)  
+#define ADDR_TO_SECTOR(X)      (((X) & 0x3FFFF) >> 12)
 
 // disable these functions
 // semicolon to not break if(x) yyy(); scenarios

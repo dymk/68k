@@ -14,7 +14,7 @@ CC   = gcc
 
 # Compiler and linker flags
 
-CXXFLAGS =  -I. -fpermissive -DUPLOADER
+CXXFLAGS =  -I. -I../68k-progs/loader.h -fpermissive -DUPLOADER
 LDFLAGS  =
 LIBS = -lstdc++
 
