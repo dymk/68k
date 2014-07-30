@@ -22,29 +22,29 @@ typedef uint8_t bool;
 #define false 0
 
 // serial functions
-static uint8_t readb();
-static uint16_t readw();
-static uint32_t readl();
+static uint8_t readb(int serial_fd);
+static uint16_t readw(int serial_fd);
+static uint32_t readl(int serial_fd);
 
-static void putl(uint32_t i);
-static void putwd(uint32_t i);
+static void putl(int serial_fd, uint32_t i);
+static void putwd(int serial_fd, uint32_t i);
 
-static int sergetc(int fd);
-static int serputc(int fd, char c);
-static void serflush(int fd);
-static uint8_t has_data(int fd);
+static int sergetc(int serial_fd);
+static int serputc(int serial_fd, char c);
+static void serflush(int serial_fd);
+static uint8_t has_data(int serial_fd);
 
 // send command to the bootloader
-static void command(int fd, uint8_t instr);
+static void command(int serial_fd, uint8_t instr);
 
-static int set_address(uint32_t addr);
+static int set_address(int serial_fd, uint32_t addr);
 
 // execute a flag set command
-static bool SET_FLAG(const char * name, uint8_t value, uint32_t magic) ;
+static bool SET_FLAG(int serial_fd, const char * name, uint8_t value, uint32_t magic) ;
 
 // large functions
-static int perform_dump(const char *file, uint32_t addr, uint32_t len);
-static void monitor(int fd);
+static int perform_dump(int serial_fd, const char *file, uint32_t addr, uint32_t len);
+static void monitor(int serial_fd);
 
 // general functions
 static uint64_t millis();

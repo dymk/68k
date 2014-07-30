@@ -20,8 +20,6 @@ extern uint8_t erased_sectors[SECTOR_COUNT];
 uint8_t MEMORY[0x100000];
 
 // file descriptor... getting lazy...
-int fd;
-char * filename = 0;
 bool can_timeout = true;
 
 void usage() {
@@ -43,7 +41,7 @@ void usage() {
     );
 }
 
-uint32_t parse_num(char * c) {
+uint32_t parse_num(const char *c) {
     uint32_t ret;
 
     if (c[0] == '$') {
@@ -214,9 +212,9 @@ int main (const int argc, char **argv) {
     }
 
     printf("Open port %s ... ", port);
-    fd = open(port,O_RDWR);
+    int serial_port = open(port, O_RDWR);
 
-    if (fd <= 0) {
+    if (serial_port <= 0) {
         printf("FAILED!\n");
         return 1;
     }
@@ -224,10 +222,10 @@ int main (const int argc, char **argv) {
     printf("OK\n");
 
     // remove any pending characters
-    serflush(fd);
+    serflush(serial_port);
 
     unsigned long mics = 1UL; // set latency to 1 microsecond
-    ioctl(fd, IOSSDATALAT, &mics);
+    ioctl(serial_port, IOSSDATALAT, &mics);
 
     speed_t speed = BAUD_RATE; // Set baud
 
@@ -235,16 +233,16 @@ int main (const int argc, char **argv) {
     // to the max possible by baud rate (in chunks of 512)
     int BAUD_DELAY = (int)(1000.0F / (BAUD_RATE / 9) * 512);
 
-    ioctl(fd, IOSSIOSPEED, &speed);
-    ioctl(fd, TIOCMBIC, &pin_rts); // deassert RTS
+    ioctl(serial_port, IOSSIOSPEED, &speed);
+    ioctl(serial_port, TIOCMBIC, &pin_rts); // deassert RTS
 
     if (flags.term_only) {
-        monitor(fd);
+        monitor(serial_port);
         return 0;
     }
 
     if (flags.do_dump) {
-        return perform_dump(flags.filename, addr, len);
+        return perform_dump(serial_port, flags.filename, addr, len);
     }
 
     if (flags.filename == 0) {
@@ -252,7 +250,7 @@ int main (const int argc, char **argv) {
         return 1;
     }
 
-    FILE *in = fopen(flags.filename,"rb");
+    FILE *in = fopen(flags.filename, "rb");
 
     if (!in) {
         printf("Failed to open %s\n", flags.filename);
@@ -409,15 +407,15 @@ int main (const int argc, char **argv) {
         programmed_ok = true;
 
         // reset board
-        command(fd, CMD_RESET);
+        command(serial_port, CMD_RESET);
         msleep(200);
-        serflush(fd);
+        serflush(serial_port);
 
         if (flags.set_addr) {
             // aligned load address with just enough room to load entire file without clobbering stack
             uint32_t load_addr = (0x80000 - 4096 - size) & ~1;
 
-            if (!set_address(load_addr))
+            if (!set_address(serial_port, load_addr))
                 return 1;
         }
 
@@ -439,7 +437,7 @@ int main (const int argc, char **argv) {
           	   // printf("final write of %d bytes",wrSz);
             }
 
-            if (write(fd, &data[i], wrSz) != wrSz) {
+            if (write(serial_port, &data[i], wrSz) != wrSz) {
         		printf("Serial write failed!");
        			exit(1);
    			}
@@ -451,8 +449,8 @@ int main (const int argc, char **argv) {
                 // sleep because the ftdi driver is terrible, so we hard rate limit
             }
 
-			while (has_data(fd))
-				if (read(fd, &ch, 1) == 1) {
+			while (has_data(serial_port))
+				if (read(serial_port, &ch, 1) == 1) {
 					readback[rbi++] = ch;
 				} else {
 					printf("Serial read error.\n");
@@ -468,8 +466,8 @@ int main (const int argc, char **argv) {
 
         // read additional bytes while they are available, wait up to 250ms for data
         while(true) {
-            if (has_data(fd)) {
-            	if(read(fd, &ch, 1) == 1) {
+            if (has_data(serial_port)) {
+            	if(read(serial_port, &ch, 1) == 1) {
 					readback[rbi] = ch;
 					start = millis();
 					rbi++;
@@ -487,17 +485,17 @@ int main (const int argc, char **argv) {
 
         if (size/10 > rbi) {
             printf("Only %d bytes read. Reset board manually and try again.\n\n", rbi);
-            close(fd);
+            close(serial_port);
             return 1;
         }
 
         // validate CRC, if enabled
         if (flags.use_qcrc) {
-            command(fd, CMD_QCRC);
+            command(serial_port, CMD_QCRC);
 
-            uint16_t intro = readw();
-            uint32_t crc = readl();
-            uint8_t nul = readb();
+            uint16_t intro = readw(serial_port);
+            uint32_t crc   = readl(serial_port);
+            uint8_t nul    = readb(serial_port);
 
             if (intro != 0xFCAC || nul != 0) {
                 printf("Sync error reading CRC. Reset board and try again.\n");
@@ -535,22 +533,25 @@ int main (const int argc, char **argv) {
             if (flags.is_srec) {
                 // apply relevant flags
 
-                if (flags.flash_wr && !SET_FLAG("flash write", CMD_SET_FLWR, FLWR_MAGIC))
+                if (flags.flash_wr  && !SET_FLAG(serial_port, "flash write", CMD_SET_FLWR, FLWR_MAGIC)) {
                     return 1;
+                }
 
-                if (flags.loader_wr && !SET_FLAG("loader write", CMD_SET_LDWR, LDWR_MAGIC))
+                if (flags.loader_wr && !SET_FLAG(serial_port, "loader write", CMD_SET_LDWR, LDWR_MAGIC)) {
                     return 1;
+                }
 
-                if (flags.bin_srec && !SET_FLAG("binary srec", CMD_SET_BINSR, BINSREC_MAGIC))
+                if (flags.bin_srec  && !SET_FLAG(serial_port, "binary srec", CMD_SET_BINSR, BINSREC_MAGIC)) {
                     return 1;
+                }
 
                 printf("Programming SREC");
                 fflush(stdout);
 
                 // execute command
-                command(fd, CMD_SREC);
+                command(serial_port, CMD_SREC);
 
-                uint32_t ok = readl();
+                uint32_t ok = readl(serial_port);
 
                 if (ok != SREC_GREET_MAGIC) {
                     printf("\nSync error writing srec (bad greeting). Reset board and try again.\nGot %08X, expected %08X\n\n", ok, 0xD0E881CC);
@@ -570,7 +571,7 @@ int main (const int argc, char **argv) {
                 uint8_t ch;
 
                 // echo progress
-                while ((ch = readb()) != 0xC0) {
+                while ((ch = readb(serial_port)) != 0xC0) {
                     printf("%3hhX %%\x8\x8\x8\x8\x8",ch);
                     fflush(stdout);
                 }
@@ -578,7 +579,7 @@ int main (const int argc, char **argv) {
                 printf("100 %%\n\n");
 
                 // read the lower byte of what hopefully is 0xC0DE
-                uint32_t c0de = (((uint16_t)ch)<< 8) | readb();
+                uint32_t c0de = (((uint16_t)ch)<< 8) | readb(serial_port);
 
                 can_timeout = true;
 
@@ -589,8 +590,8 @@ int main (const int argc, char **argv) {
                     return 1;
                 }
 
-                uint16_t ret_code = readw();
-                uint16_t tail_magic = readw();
+                uint16_t ret_code = readw(serial_port);
+                uint16_t tail_magic = readw(serial_port);
 
                 if (tail_magic != SREC_TAIL_MAGIC) {
                     printf("Sync error writing srec (bad tail). Reset board and try again.\nGot %04X, expected %04X\n\n", tail_magic, SREC_TAIL_MAGIC);
@@ -613,44 +614,44 @@ int main (const int argc, char **argv) {
                 if (!flags.boot_srec) {
                     flags.no_terminal = true;
                 } else {
-                    set_address(entry_point);
+                    set_address(serial_port, entry_point);
                     printf("Booting program.\n\n");
-                    command(fd, CMD_BOOT);
+                    command(serial_port, CMD_BOOT);
                 }
 
                 break;
             } else {
                 printf("Booting program.\n\n");
-                command(fd, CMD_BOOT);
+                command(serial_port, CMD_BOOT);
                 break;
             }
         }
     }
 
     if (!flags.no_terminal)
-        monitor(fd);
+        monitor(serial_port);
 
-    close(fd);
+    close(serial_port);
 
     return 0;
 }
 
-int set_address(uint32_t addr) {
+int set_address(int serial_fd, uint32_t addr) {
     printf("Setting address to 0x%x... ", addr);
     fflush(stdout);
 
-    command(fd, CMD_SET_ADDR);
+    command(serial_fd, CMD_SET_ADDR);
 
-    uint32_t intro = readl();
+    uint32_t intro = readl(serial_fd);
 
     if (intro != ADDR_MAGIC) {
         printf("Sync error setting write address: got %x\n", intro);
         return 0;
     }
 
-    putl(addr);
-    uint32_t addr_rb = readl();
-    uint16_t tail = readw();
+    putl(serial_fd, addr);
+    uint32_t addr_rb = readl(serial_fd);
+    uint16_t tail = readw(serial_fd);
 
     if (tail != ADDR_TAIL_MAGIC) {
         printf("Sync error in SetAddr tail: got %x\n", tail);
@@ -667,7 +668,7 @@ int set_address(uint32_t addr) {
     return 1;
 }
 
-int perform_dump(const char *file, uint32_t addr, uint32_t len) {
+int perform_dump(int serial_fd, const char *file, uint32_t addr, uint32_t len) {
     FILE *out = fopen(file,"w");
 
     if (
@@ -679,37 +680,37 @@ int perform_dump(const char *file, uint32_t addr, uint32_t len) {
 
     printf("Performing dump of %d bytes starting at 0x%06X\n",len, addr);
     printf("Resetting board...\n");
-    command(fd, CMD_RESET);
-    serflush(fd);
+    command(serial_fd, CMD_RESET);
+    serflush(serial_fd);
 
-    if (!set_address(addr))
+    if (!set_address(serial_fd, addr))
         return 1;
 
     printf("Sending dump command... \n");
-    command(fd, CMD_DUMP);
+    command(serial_fd, CMD_DUMP);
 
-    uint32_t greeting = readw();
+    uint32_t greeting = readw(serial_fd);
 
     if (greeting != DUMP_GREET_MAGIC) {
         printf("Sync error in greeting. Got 0x%x\n", greeting);
         return 1;
     }
 
-    putl(len);
+    putl(serial_fd, len);
 
     uint32_t addr_rb, len_rb;
-    addr_rb = readl();
-    len_rb = readl();
+    addr_rb = readl(serial_fd);
+    len_rb = readl(serial_fd);
 
     if (addr_rb != addr || len_rb != len) {
-        putl(0);
+        putl(serial_fd, 0);
         printf("Bad readback of length/address! Dump aborted...\n");
-        printf("Address: read 0x%06X, expected 0x%06X\n",addr_rb, addr);
-        printf("Length:  read 0x%06X, expected 0x%06X\n",len_rb, len);
+        printf("Address: read 0x%06X, expected 0x%06X\n", addr_rb, addr);
+        printf("Length:  read 0x%06X, expected 0x%06X\n", len_rb, len);
         return 1;
     }
 
-    putwd(DUMP_START_MAGIC);
+    putwd(serial_fd, DUMP_START_MAGIC);
 
     int crc = 0xDEADC0DE;
     char ch;
@@ -727,8 +728,8 @@ int perform_dump(const char *file, uint32_t addr, uint32_t len) {
     printf("\n");
 
     while (sz < len) {
-        if (has_data(fd)) {
-            if(read(fd, &ch, 1) == 1) {
+        if (has_data(serial_fd)) {
+            if(read(serial_fd, &ch, 1) == 1) {
 
                 if (out) fputc(ch, out);
 
@@ -757,8 +758,8 @@ int perform_dump(const char *file, uint32_t addr, uint32_t len) {
 
     printf("%6.2f %%\n\n",((float)100));
 
-    uint32_t rem_crc = readl();
-    uint16_t tail = readw();
+    uint32_t rem_crc = readl(serial_fd);
+    uint16_t tail = readw(serial_fd);
 
     if (tail != DUMP_TAIL_MAGIC) {
         printf("Sync error in tail. Got 0x%x\n", tail);
@@ -816,12 +817,12 @@ void hex_dump(uint8_t *array, uint32_t cnt, uint32_t baseaddr) {
 }
 
 // perform a flag-set command (returns a magic value)
-bool SET_FLAG(const char * name, uint8_t value, uint32_t magic) {
+bool SET_FLAG(int serial_fd, const char * name, uint8_t value, uint32_t magic) {
     printf("Setting %s... ",name);
     fflush(stdout);
 
-    command(fd, value);
-    uint32_t ok = readl();
+    command(serial_fd, value);
+    uint32_t ok = readl(serial_fd);
 
     if (ok != magic) {
         printf("Sync error setting %s. Reset board and try again.\nGot %08X, expected %08X\n\n", name, ok, magic);
@@ -832,19 +833,19 @@ bool SET_FLAG(const char * name, uint8_t value, uint32_t magic) {
     return 1;
 }
 
-uint8_t has_data(int fd) {
+uint8_t has_data(int serial_fd) {
 	struct pollfd poll_str;
-    poll_str.fd = fd;
+    poll_str.fd = serial_fd;
     poll_str.events = POLLIN;
 
     return poll(&poll_str, 1, 0);
 }
 
-void monitor(int fd) {
+void monitor(int serial_fd) {
     // ensure nodelay is on
-    int flags = fcntl(fd, F_GETFL);
+    int flags = fcntl(serial_fd, F_GETFL);
     flags |= O_NDELAY;
-    fcntl(fd,F_SETFL,flags);
+    fcntl(serial_fd,F_SETFL,flags);
 
     // turn off line buffering and local echo
     struct termios oldt;
@@ -857,9 +858,9 @@ void monitor(int fd) {
     char ch;
     while (true) {
         if (has_data(0))
-            serputc(fd,getchar());
+            serputc(serial_fd,getchar());
 
-        while (1 == read(fd, &ch, 1)) {
+        while (1 == read(serial_fd, &ch, 1)) {
             if (isprint(ch) || ch == '\n') {
                 putchar(ch);
             } else {
@@ -874,9 +875,9 @@ void monitor(int fd) {
     }
 }
 
-int serputc(int fd, char c) {
+int serputc(int serial_fd, char c) {
    // printf("xmit %02hhx\n",c);
-    if (write(fd, &c, 1) != 1) {
+    if (write(serial_fd, &c, 1) != 1) {
         printf("Serial write failed");
         exit(1);
     }
@@ -885,19 +886,19 @@ int serputc(int fd, char c) {
 
 // empty the entire input queue
 // so we should be in sync
-void serflush(int fd) {
+void serflush(int serial_fd) {
     char ch;
     msleep(100);
-    while (has_data(fd))
-    	read(fd, &ch, 1);
+    while (has_data(serial_fd))
+    	read(serial_fd, &ch, 1);
 }
 
 
-int sergetc(int fd) {
+int sergetc(int serial_fd) {
     uint64_t start = millis();
     uint64_t t;
 
-    while(!has_data(fd)) {
+    while(!has_data(serial_fd)) {
         t = millis();
         if (can_timeout && (t-start) > 2000) {
             printf("Timeout occurred in sergetc(). Ensure bootloader supports command.\n");
@@ -907,7 +908,7 @@ int sergetc(int fd) {
     }
 
     char ch;
-    int ret = read(fd, &ch, 1);
+    int ret = read(serial_fd, &ch, 1);
     if (ret == -1) {
         printf("\n *** Serial read failed %d ***\n",ret);
         exit(1);
@@ -952,28 +953,28 @@ void command(int fd, uint8_t instr) {
     ioctl(fd, TIOCMBIC, &pin_rts); // deassert RTS
 }
 
-void putl(uint32_t i) {
-    serputc(fd, (i >> 24) & 0xFF);
-    serputc(fd, (i >> 16) & 0xFF);
-    serputc(fd, (i >>  8) & 0xFF);
-    serputc(fd, (i      ) & 0xFF);
+void putl(int serial_fd, uint32_t i) {
+    serputc(serial_fd, (i >> 24) & 0xFF);
+    serputc(serial_fd, (i >> 16) & 0xFF);
+    serputc(serial_fd, (i >>  8) & 0xFF);
+    serputc(serial_fd, (i      ) & 0xFF);
 }
 
-void putwd(uint32_t i) {
-    serputc(fd, (i >>  8) & 0xFF);
-    serputc(fd, (i      ) & 0xFF);
+void putwd(int serial_fd, uint32_t i) {
+    serputc(serial_fd, (i >>  8) & 0xFF);
+    serputc(serial_fd, (i      ) & 0xFF);
 }
 
-uint8_t readb() {
-    return sergetc(fd);
+uint8_t readb(int serial_fd) {
+    return sergetc(serial_fd);
 }
 
-uint16_t readw() {
-    return (((uint16_t)readb()) << 8) | readb();
+uint16_t readw(int serial_fd) {
+    return (((uint16_t)readb(serial_fd)) << 8) | readb(serial_fd);
 }
 
-uint32_t readl() {
-    return (((uint32_t)readw()) << 16) | readw();
+uint32_t readl(int serial_fd) {
+    return (((uint32_t)readw(serial_fd)) << 16) | readw(serial_fd);
 }
 
 uint64_t millis() {
