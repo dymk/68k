@@ -1,24 +1,25 @@
 /* S-record parsing */
 
 #include <stdint.h>
-#include <loader.h>
+#include "../projects/include/loader.h"
 
 #define BREAK_IF_ERROR()    if (errno) break
 
 // global state vars
-uint8_t *srec;          // pointer to memory containing s record
-uint32_t srec_pos;      // current position in srec
-uint32_t srec_sz;       // size of srec, including trailing null
-uint8_t write_armed;    // boolean if writes are enabled or not
+static uint8_t *srec;          // pointer to memory containing s record
+static uint32_t srec_pos;      // current position in srec
+static uint32_t srec_sz;       // size of srec, including trailing null
+static uint8_t write_armed;    // boolean if writes are enabled or not
 
 // info vars
-uint16_t rec_cnt;       // number of records
+static uint16_t rec_cnt;       // number of records
+static uint8_t wr_flags;       // write flags (see loader.h)
+static uint8_t errno;          // error flags register
+static uint8_t checksum;       // checksum char
+
+// shared global state
 uint32_t entry_point;   // entry point, specified in S7-S9 records, 0 if none
 uint32_t program_sz;    // number of data bytes written
-uint8_t wr_flags;       // write flags (see loader.h)
-uint8_t errno;          // error flags register
-uint8_t checksum;       // checksum char
-
 uint8_t erased_sectors[SECTOR_COUNT];
                         // array containing sectors that were erased
 
@@ -63,7 +64,7 @@ uint8_t read_byte() {
 }
 
 // read an address of variable length
-uint32_t readAddr(uint8_t len) {
+uint32_t read_addr(uint8_t len) {
     uint32_t i = 0;
     while (len-- > 0)
         i = (i << 8) | read_byte();
@@ -177,7 +178,7 @@ uint8_t parseSREC(uint8_t * buffer, uint32_t buffer_len, uint8_t fl, uint8_t arm
     // check for trailing null
     if (srec[srec_sz-1] != 0) {
         errno |= FORMAT_ERROR;
-        dbgprintf("Record is missing trailing null\n", srec[srec_sz]);
+        dbgprintf("Record is missing trailing null\n");
     }
 
     // number of address bytes for each record type
@@ -211,7 +212,7 @@ uint8_t parseSREC(uint8_t * buffer, uint32_t buffer_len, uint8_t fl, uint8_t arm
         len = read_byte() - addr_len[typ] - 1;
 
         // read address field
-        address = readAddr(addr_len[typ]);
+        address = read_addr(addr_len[typ]);
 
         BREAK_IF_ERROR();
 

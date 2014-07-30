@@ -13,15 +13,21 @@ CPP  = g++
 CC   = gcc
 
 # Compiler and linker flags
+COMMONFLAGS = -I. -fpermissive -Wall -DUPLOADER
+CFLAGS   = $(COMMONFLAGS) -std=c99
+CXXFLAGS = $(COMMONFLAGS)
 
-CXXFLAGS =  -I. -I../68k-progs/loader.h -fpermissive -DUPLOADER
 LDFLAGS  =
-LIBS = -lstdc++
+LIBS =
 
 # List of source files
 
-SRCS=$(wildcard *.cpp)
-OBJS=$(SRCS:.cpp=.o)
+SRCS :=$(wildcard *.c *.cpp)
+OBJS := $(SRCS:.c=.o)
+OBJS := $(OBJS:.cpp=.o)
+
+$(info $(SRCS))
+$(info $(OBJS))
 
 ####### TARGETS ########
 
@@ -49,6 +55,9 @@ open:
 $(BIN): $(OBJS)
 	$(CC) $(LDFLAGS) $(LIBS) -o $(BIN) $(OBJS)
 
-.o:
+.c.o:
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+.cpp.o:
 	$(CPP) $(CXXFLAGS) -c -o $@ $<
 
