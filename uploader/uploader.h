@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <string.h>
 #include <unistd.h>
+#include "srec_parse_uploader.h"
 
 #include "../projects/include/loader.h"
 
@@ -42,7 +43,7 @@ static int set_address(uint32_t addr);
 static bool SET_FLAG(const char * name, uint8_t value, uint32_t magic) ;
 
 // large functions
-static int perform_dump(uint32_t addr, uint32_t len);
+static int perform_dump(const char *file, uint32_t addr, uint32_t len);
 static void monitor(int fd);
 
 // general functions

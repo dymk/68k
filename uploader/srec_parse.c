@@ -1,6 +1,7 @@
 /* S-record parsing */
 
 #include <stdint.h>
+#include "srec_parse_uploader.h"
 #include "../projects/include/loader.h"
 
 #define BREAK_IF_ERROR()    if (errno) break
@@ -59,9 +60,9 @@ uint8_t read_byte() {
     } else
         b = (read_nibble() << 4) | read_nibble(); // read two hex chars to assemble a byte
 
-    checksum += b;
-    return b;
-}
+        checksum += b;
+        return b;
+    }
 
 // read an address of variable length
 uint32_t read_addr(uint8_t len) {
@@ -80,14 +81,14 @@ void flash_write(uint32_t addr, uint8_t byte) {
 #endif
 
     if (!erased_sectors[sector]) {
-
 #ifdef WR_DEBUG
-         dbgprintf("Flash erase sector %hhd\n", sector);
+        dbgprintf("Flash erase sector %hhd\n", sector);
 #endif
-         erased_sectors[sector] = 1;
+        erased_sectors[sector] = 1;
 
-         if (write_armed)
+        if (write_armed) {
             flash_erase_sector(sector);
+        }
     }
 
     if (!write_armed)
@@ -103,25 +104,28 @@ void ram_write(uint32_t addr, uint8_t byte) {
     dbgprintf("%08X rmWrite %02X\n",addr,byte);
 #endif
 
-    if (!write_armed)
+    if (!write_armed) {
         return;
+    }
 
     MEM(addr) = byte;
 }
 
 // perform a write (and do a lot of sanity checks)
-uint8_t write(uint32_t addr, uint8_t byte) {
+uint8_t write_checked(uint32_t addr, uint8_t byte) {
 
     // first: do a lot of sanity checks on the write
     if (addr < LOWEST_VALID_ADDR) {
         errno |= INVALID_WRITE;
         dbgprintf("Attempted to write to system address space. Bad address: 0x%X\n", addr);
         return 1;
-    } else if (addr >= IO_START) {
+    }
+    else if (addr >= IO_START) {
         errno |= INVALID_WRITE;
         dbgprintf("Attempted to write to IO address space (or higher). Bad address: 0x%X\n", addr);
         return 1;
-    } else if (addr >= FLASH_START && addr < IO_START) {
+    }
+    else if (addr >= FLASH_START && addr < IO_START) {
 
         if (!(wr_flags & ALLOW_FLASH)) {
             errno |= INVALID_WRITE;
@@ -137,12 +141,16 @@ uint8_t write(uint32_t addr, uint8_t byte) {
 
         // okay, seems valid: pass it to flash_write
         flash_write(addr, byte);
-    } else  // execute RAM write
+
+    }
+    else  {
+        // execute RAM write
         ram_write(addr, byte);
+    }
 
     // verify that the byte was successfully written
     if (write_armed && MEM(addr) != byte) {
-        dbgprintf("Write to %X of value %X failed.\n",addr,byte&0xFF);
+        dbgprintf("Write to %X of value %X failed.\n" ,addr, byte & 0xFF);
         errno |= FAILED_WRITE;
         return 1;
     }
@@ -217,46 +225,47 @@ uint8_t parseSREC(uint8_t * buffer, uint32_t buffer_len, uint8_t fl, uint8_t arm
         BREAK_IF_ERROR();
 
         switch (typ) {
-            case 3: // data records (varying address size)
-            case 2:
-            case 1:
-                data_rec_cnt++;
-            case 0: // metadata record
-                for (int i = 0; i < len && !errno; i++) {
-                    uint8_t byt = read_byte();
+        case 3: // data records (varying address size)
+        case 2:
+        case 1:
+            data_rec_cnt++;
+        case 0: // metadata record
+            for (int i = 0; i < len && !errno; i++) {
+                uint8_t byt = read_byte();
 
-                    if (typ == 0)
-                        continue;
+                if (typ == 0) {
+                    continue;
+                }
 
-                    // perform write
-                    write(address, byt);
-                    address++;
-                    program_sz++;
-                }
-                break;
-            case 5: // record count
-            case 6:
-                if (address != data_rec_cnt) {
-                    errno |= FORMAT_ERROR;
-                    dbgprintf("Data record count missmatch (read %d, actual %d)\n",address,data_rec_cnt);
-                    return errno;
-                }
-                break;
-            case 7: // entry point records (varying address size)
-            case 8:
-            case 9:
-                entry_point = address;
-                //dbgprintf("Set entry point to 0x%x\n",entry_point);
-                break;
+                // perform write
+                write_checked(address, byt);
+                address++;
+                program_sz++;
+            }
+            break;
+        case 5: // record count
+        case 6:
+            if (address != data_rec_cnt) {
+                errno |= FORMAT_ERROR;
+                dbgprintf("Data record count missmatch (read %d, actual %d)\n",address,data_rec_cnt);
+                return errno;
+            }
+            break;
+        case 7: // entry point records (varying address size)
+        case 8:
+        case 9:
+            entry_point = address;
+            //dbgprintf("Set entry point to 0x%x\n",entry_point);
+            break;
         }
 
         BREAK_IF_ERROR();
 
         if (len != 0 && (typ >= 4)) {
-             errno |= FORMAT_ERROR;
-             dbgprintf("Record #%d has data, but type (%d) should not contain data!\n", rec_cnt,typ);
-             break;
-        }
+           errno |= FORMAT_ERROR;
+           dbgprintf("Record #%d has data, but type (%d) should not contain data!\n", rec_cnt,typ);
+           break;
+       }
 
         loc_crc = ~checksum;      // one's complement
         file_crc = read_byte();   // read checksum from file
@@ -277,8 +286,12 @@ uint8_t parseSREC(uint8_t * buffer, uint32_t buffer_len, uint8_t fl, uint8_t arm
 #ifdef BOOTLOADER
         srec_progress();
 #endif
-
     }
 
     return errno;
 }
+
+#ifdef UPLOADER
+// stub out flash_erase_sector for uploader
+void flash_erase_sector(uint8_t sector) {}
+#endif

@@ -208,6 +208,11 @@ int main (const int argc, char **argv) {
         }
     }
 
+    // passed a filename as well
+    if(optind < argc) {
+        flags.filename = argv[optind];
+    }
+
     printf("Open port %s ... ", port);
     fd = open(port,O_RDWR);
 
@@ -239,7 +244,7 @@ int main (const int argc, char **argv) {
     }
 
     if (flags.do_dump) {
-        return perform_dump(addr, len);
+        return perform_dump(flags.filename, addr, len);
     }
 
     if (flags.filename == 0) {
@@ -662,14 +667,14 @@ int set_address(uint32_t addr) {
     return 1;
 }
 
-int perform_dump(uint32_t addr, uint32_t len) {
-    FILE *out = fopen(filename,"w");
+int perform_dump(const char *file, uint32_t addr, uint32_t len) {
+    FILE *out = fopen(file,"w");
 
     if (
-        (filename && out == NULL) ||
-        (!filename && len >= 5000))
+        (file && out == NULL) ||
+        (!file && len >= 5000))
     {
-        printf("Failed to open '%s' for memory dump.\n",filename);
+        printf("Failed to open '%s' for memory dump.\n",file);
     }
 
     printf("Performing dump of %d bytes starting at 0x%06X\n",len, addr);
