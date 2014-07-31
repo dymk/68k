@@ -60,13 +60,17 @@ uint8_t getn() {
 }
 
 uint8_t getb() {
-    uint8_t b = (getn() << 4) | getn();
+    uint8_t hi = getn();
+    uint8_t lo = getn();
+
+    uint8_t b = (hi << 4) | lo;
+
     fputc(b, out);
     checksum += b;
     return b;
 }
 
-uint32_t readAddr(uint8_t len) {
+uint32_t read_addr(uint8_t len) {
     uint32_t i = 0;
     while (len-- > 0)
         i = (i << 8) | getb();
@@ -164,7 +168,7 @@ int main (int argc, char ** argv) {
         checksum = 0;              // reset checksum
         len = getb() - addr_len[typ] - 1;
 
-        address = readAddr(addr_len[typ]);
+        address = read_addr(addr_len[typ]);
 
         if (errno) break;
 
