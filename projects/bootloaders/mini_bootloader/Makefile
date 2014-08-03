@@ -7,7 +7,15 @@ CODE_LOC = RAM
 # USE_KERNEL = 0
 
 # no optimization
-OPTIMIZE = 0
+OPTIMIZE = s
+
+LINK_SCRIPT = link.ld
+
+# don't link with {ram,rom}.o
+NO_STARTUP = 1
+
+# no core/gcc
+NO_CORELIB = 1
 
 # Libraries
 LIBS = -lhd44780

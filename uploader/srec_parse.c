@@ -21,8 +21,8 @@ static uint8_t checksum;       // checksum char
 // shared global state
 uint32_t entry_point;   // entry point, specified in S7-S9 records, 0 if none
 uint32_t program_sz;    // number of data bytes written
+// array containing sectors that were erased
 uint8_t erased_sectors[SECTOR_COUNT];
-                        // array containing sectors that were erased
 
 // read a character from srec
 uint8_t readch() {
@@ -57,8 +57,12 @@ uint8_t read_byte() {
 
     if (wr_flags & BINARY_SREC) {   // binary mode; just read a character
         b = readch();
-    } else
-        b = (read_nibble() << 4) | read_nibble(); // read two hex chars to assemble a byte
+    }
+    else {
+        // read two hex chars to assemble a byte
+        b = read_nibble();
+        b = (b << 4) | read_nibble();
+    }
 
         checksum += b;
         return b;

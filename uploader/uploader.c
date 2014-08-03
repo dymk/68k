@@ -1,20 +1,26 @@
 #include "uploader.h"
+#include "serial_io.h"
 
 #define IOSSDATALAT    _IOW('T', 0, unsigned long)
 #define IOSSIOSPEED    _IOW('T', 2, speed_t)
 
 #define ROL(num, bits) (((num) << (bits)) | ((num) >> (32 - (bits))))
-#define msleep(x) usleep((x) * 1000)
+
+
+// execute a flag set command
+static bool SET_FLAG(int serial_fd, const char * name, uint8_t value, uint32_t magic) ;
+
+// large functions
+static int perform_dump(int serial_fd, const char *file, uint32_t addr, uint32_t len);
+static void monitor(int serial_fd);
+
+static uint32_t crc_update (uint32_t inp, uint8_t v);
+static void hex_dump(uint8_t *array, uint32_t cnt, uint32_t baseaddr) ;
 
 // default port
 const char port_def[] ="/dev/cu.usbserial-FTWEIJYD";
 
 const int pin_rts = TIOCM_RTS;
-
-// s-rec info variables
-extern uint32_t program_sz;
-extern uint32_t entry_point;
-extern uint8_t erased_sectors[SECTOR_COUNT];
 
 // simulated system memory
 uint8_t MEMORY[0x100000];
@@ -191,8 +197,9 @@ int main (const int argc, char **argv) {
         addr = -1;
         addr = parse_num(addr_s);
 
-        if (len_s)
+        if (len_s) {
             len = parse_num(len_s);
+        }
 
 
         if (len == 0 || len > 768 * 1024) {
@@ -245,36 +252,42 @@ int main (const int argc, char **argv) {
         return perform_dump(serial_port, flags.filename, addr, len);
     }
 
-    if (flags.filename == 0) {
-        printf("Missing filename.\n");
+    if (flags.filename == NULL) {
+        fprintf(stderr, "Missing filename.\n");
         return 1;
     }
 
     FILE *in = fopen(flags.filename, "rb");
 
     if (!in) {
-        printf("Failed to open %s\n", flags.filename);
+        fprintf(stderr, "Failed to open: %s\n", flags.filename);
         return 1;
     }
 
     // get file size
-    fseek (in, 0, SEEK_END);   // non-portable
-    int size = ftell (in);
+    long size = 0;
+    if(fseek (in, 0, SEEK_END) == 0) {
+        size = ftell(in);
+    }
+    else {
+        perror("fseek");
+        return 1;
+    }
     rewind(in);
 
-    fprintf(stderr, "File size: %d\n", size);
+    printf("File size: %ld\n", size);
 
     // allocate buffers
-    uint8_t *data = (uint8_t*)malloc(size+1);
+    uint8_t *data     = (uint8_t*)malloc(size+1);
     uint8_t *readback = (uint8_t*)malloc(size+1);
 
     if (!data || !readback) {
-        printf("Failed to allocate memory\n");
+        fprintf(stderr, "Failed to allocate memory\n");
         return 1;
     }
 
     if (fread(data, 1, size, in) != size) {
-        printf("Did not read entire file\n");
+        fprintf(stderr, "Did not read entire file\n");
         return 1;
     }
 
@@ -287,7 +300,7 @@ int main (const int argc, char **argv) {
         (flags.bin_srec  ? BINARY_SREC  : 0);
 
     // clear simulated memory
-    memset(MEMORY, 0, 0x100000);
+    memset(MEMORY, 0, sizeof(MEMORY));
 
     if (flags.is_srec) {
         // add trailing null
@@ -297,32 +310,40 @@ int main (const int argc, char **argv) {
         uint8_t ret = parseSREC(data, size+1, srec_flags, true);
 
         if (ret) {
-            printf("\nFailed to validate S-record. Ret: ");
+            fprintf(stderr, "\nFailed to validate S-record. Ret: ");
             for (int i = 7; i >= 0; i--) {
-                printf ("%c",((ret >> i) & 0x1) + '0');
-                if (i == 4) printf(" ");
+                fprintf(stderr, "%c", ((ret >> i) & 0x1) + '0');
+
+                if(i == 4) {
+                    fprintf(stderr, " ");
+                }
             }
 
             printf("\n");
 
-            if (ret & BAD_HEX_CHAR || ret & FORMAT_ERROR)
-                printf("\nVerify that the file is not corrupt.\n");
+            if (ret & BAD_HEX_CHAR || ret & FORMAT_ERROR) {
+                fprintf(stderr, "\nVerify that the file is not corrupt.\n");
+            }
 
-            printf("\nProgramming aborted.\n");
+            fprintf(stderr, "\nProgramming aborted.\n");
             return 1;
-        } else
+        }
+        else {
             printf("OK.\n");
+        }
 
         if (flags.boot_srec) {
             if(entry_point == 0) {
                 printf("Error: -b flag present, but S-record does not specify an entry point. Aborting!\n");
                 return 1;
-            } else
+            }
+            else {
                 printf("Entry point of 0x%X\n",entry_point);
+            }
         }
 
         printf("Payload size: %d\n",program_sz);
-        flags.use_qcrc  = true;
+        flags.use_qcrc = true;
         flags.set_addr = true;
 
         // a loader write will be executed: do a sanity check
@@ -372,23 +393,25 @@ int main (const int argc, char **argv) {
             if (ADDR_TO_SECTOR(pc) != 0)
                 printf("\nWarning: PC is not located in the bootloader sector - it is in sector %d.\n", ADDR_TO_SECTOR(pc));
 
-            const char *conf_chars=" !@#$%^&*()";
+            const char *conf_chars = " !@#$%^&*()";
             srand(time(NULL));
 
             if (flags.loader_wr && flags.flash_wr) {
                 int num = (rand() % 9) + 1;
 
-                printf("\n###################################################################\n");
-                printf("# WARNING: Loader write and Flash write have both been enabled.   #\n");
-                printf("# At least one write to the bootloader sector will be executed.   #\n");
-                printf("# The stack pointer and program counter values appear to be sane. #\n");
-                printf("#                                                                 #\n");
-                printf("# Please confirm that you want to update the bootloader sector    #\n");
-                printf("# by pressing SHIFT+%d, then enter. Press any other key to abort.  #\n",num);
-                printf("###################################################################\n\n> ");
+                printf("\n");
+                printf("#####################################################################\n");
+                printf("# WARNING: Loader write and Flash write have both been enabled.     #\n");
+                printf("# At least one write to the bootloader sector will be executed.     #\n");
+                printf("# The stack pointer and program counter values appear to be sane.   #\n");
+                printf("#                                                                   #\n");
+                printf("# Please confirm that you want to update the bootloader sector      #\n");
+                printf("# by pressing SHIFT+'%d', then enter. Press any other key to abort. #\n", num);
+                printf("#####################################################################\n\n ");
+                printf("> ");
 
                 if (getchar() != conf_chars[num]) {
-                    printf("\nAborting!\n");
+                    fprintf(stderr, "\nAborting!\n");
                     return 1;
                 }
 
@@ -415,8 +438,9 @@ int main (const int argc, char **argv) {
             // aligned load address with just enough room to load entire file without clobbering stack
             uint32_t load_addr = (0x80000 - 4096 - size) & ~1;
 
-            if (!set_address(serial_port, load_addr))
+            if (!set_address(serial_port, load_addr)) {
                 return 1;
+            }
         }
 
         printf("Uploading...\n");
@@ -438,12 +462,12 @@ int main (const int argc, char **argv) {
             }
 
             if (write(serial_port, &data[i], wrSz) != wrSz) {
-        		printf("Serial write failed!");
-       			exit(1);
+        		fprintf(stderr, "Serial write failed!");
+       			return 1;
    			}
 
             if (i % 512 == 0) {
-                printf("%3d %%\x8\x8\x8\x8\x8",(int)((float)i * 100) / size);
+                printf("%3ld %%\x8\x8\x8\x8\x8",(int)((float)i * 100) / size);
                 fflush(stdout);
                 msleep(BAUD_DELAY);
                 // sleep because the ftdi driver is terrible, so we hard rate limit
@@ -452,8 +476,9 @@ int main (const int argc, char **argv) {
 			while (has_data(serial_port))
 				if (read(serial_port, &ch, 1) == 1) {
 					readback[rbi++] = ch;
-				} else {
-					printf("Serial read error.\n");
+				}
+                else {
+					fprintf(stderr, "Serial read error.\n");
 					return 1;
 				}
 
@@ -498,8 +523,8 @@ int main (const int argc, char **argv) {
             uint8_t nul    = readb(serial_port);
 
             if (intro != 0xFCAC || nul != 0) {
-                printf("Sync error reading CRC. Reset board and try again.\n");
-                printf("Error: %s\n\n",(nul != 0)?"Intro invalid.":"Tail invalid.");
+                fprintf(stderr, "Sync error reading CRC. Reset board and try again.\n");
+                fprintf(stderr, "Error: %s\n\n", (nul != 0) ? "Intro invalid." : "Tail invalid.");
                 return 1;
             }
 
@@ -636,38 +661,6 @@ int main (const int argc, char **argv) {
     return 0;
 }
 
-int set_address(int serial_fd, uint32_t addr) {
-    printf("Setting address to 0x%x... ", addr);
-    fflush(stdout);
-
-    command(serial_fd, CMD_SET_ADDR);
-
-    uint32_t intro = readl(serial_fd);
-
-    if (intro != ADDR_MAGIC) {
-        printf("Sync error setting write address: got %x\n", intro);
-        return 0;
-    }
-
-    putl(serial_fd, addr);
-    uint32_t addr_rb = readl(serial_fd);
-    uint16_t tail = readw(serial_fd);
-
-    if (tail != ADDR_TAIL_MAGIC) {
-        printf("Sync error in SetAddr tail: got %x\n", tail);
-        return 0;
-    }
-
-    if (addr_rb != addr) {
-        printf("Address verification failed (got %x, expected %x)\n", addr_rb, addr);
-        return 0;
-    }
-
-    printf("OK!\n");
-
-    return 1;
-}
-
 int perform_dump(int serial_fd, const char *file, uint32_t addr, uint32_t len) {
     FILE *out = fopen(file,"w");
 
@@ -786,7 +779,7 @@ int perform_dump(int serial_fd, const char *file, uint32_t addr, uint32_t len) {
     return 0;
 }
 
-void hex_dump(uint8_t *array, uint32_t cnt, uint32_t baseaddr) {
+static void hex_dump(uint8_t *array, uint32_t cnt, uint32_t baseaddr) {
     int c = 0;
     char ascii[17];
     ascii[16] = 0;
@@ -813,7 +806,10 @@ void hex_dump(uint8_t *array, uint32_t cnt, uint32_t baseaddr) {
         while (c++ < 16)
             printf("   ");
         printf("  %s\n",ascii);
-    } else printf("\n");
+    }
+    else {
+        printf("\n");
+    }
 }
 
 // perform a flag-set command (returns a magic value)
@@ -831,14 +827,6 @@ bool SET_FLAG(int serial_fd, const char * name, uint8_t value, uint32_t magic) {
 
     printf("OK.\n");
     return 1;
-}
-
-uint8_t has_data(int serial_fd) {
-	struct pollfd poll_str;
-    poll_str.fd = serial_fd;
-    poll_str.events = POLLIN;
-
-    return poll(&poll_str, 1, 0);
 }
 
 void monitor(int serial_fd) {
@@ -875,106 +863,8 @@ void monitor(int serial_fd) {
     }
 }
 
-int serputc(int serial_fd, char c) {
-   // printf("xmit %02hhx\n",c);
-    if (write(serial_fd, &c, 1) != 1) {
-        printf("Serial write failed");
-        exit(1);
-    }
-    return 1;
-}
-
-// empty the entire input queue
-// so we should be in sync
-void serflush(int serial_fd) {
-    char ch;
-    msleep(100);
-    while (has_data(serial_fd))
-    	read(serial_fd, &ch, 1);
-}
-
-
-int sergetc(int serial_fd) {
-    uint64_t start = millis();
-    uint64_t t;
-
-    while(!has_data(serial_fd)) {
-        t = millis();
-        if (can_timeout && (t-start) > 2000) {
-            printf("Timeout occurred in sergetc(). Ensure bootloader supports command.\n");
-            exit(1);
-        }
-        usleep(10);
-    }
-
-    char ch;
-    int ret = read(serial_fd, &ch, 1);
-    if (ret == -1) {
-        printf("\n *** Serial read failed %d ***\n",ret);
-        exit(1);
-    }
-
-   // printf("rec  %02hhx\n",ch);
-    return ch;
-}
-
-void serprintf(int fd, const char *fmt, ... ){
-    char buf[256];
-    va_list args;
-    va_start (args, fmt );
-    int l = vsnprintf(buf, 256, fmt, args);
-    va_end (args);
-
-    if (write(fd, &buf,l) != l) {
-        printf("Failed to write entire buffer\n");
-        exit (1);
-    }
-}
-
-
 uint32_t crc_update (uint32_t inp, uint8_t v) {
 	return ROL(inp ^ v, 1);
-}
-
-void command(int fd, uint8_t instr) {
-    ioctl(fd, TIOCMBIS, &pin_rts); // assert RTS
-    usleep(50*1000);
-
-    if (instr == CMD_RESET) { // send multiple to ensure we enter bootloader mode
-        for (int i = 0; i < 8; i++) {
-            serputc(fd, instr);
-            usleep(25*1000);
-        }
-    } else {
-        serputc(fd, instr);
-        usleep(50*1000);
-    }
-
-    ioctl(fd, TIOCMBIC, &pin_rts); // deassert RTS
-}
-
-void putl(int serial_fd, uint32_t i) {
-    serputc(serial_fd, (i >> 24) & 0xFF);
-    serputc(serial_fd, (i >> 16) & 0xFF);
-    serputc(serial_fd, (i >>  8) & 0xFF);
-    serputc(serial_fd, (i      ) & 0xFF);
-}
-
-void putwd(int serial_fd, uint32_t i) {
-    serputc(serial_fd, (i >>  8) & 0xFF);
-    serputc(serial_fd, (i      ) & 0xFF);
-}
-
-uint8_t readb(int serial_fd) {
-    return sergetc(serial_fd);
-}
-
-uint16_t readw(int serial_fd) {
-    return (((uint16_t)readb(serial_fd)) << 8) | readb(serial_fd);
-}
-
-uint32_t readl(int serial_fd) {
-    return (((uint32_t)readw(serial_fd)) << 16) | readw(serial_fd);
 }
 
 uint64_t millis() {

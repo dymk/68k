@@ -3,13 +3,16 @@
 # RAM or ROM
 CODE_LOC = RAM
 
-# no kernel
-# USE_KERNEL = 0
+# use multitasking lib
+USE_MULTITASK = 1
 
 # no optimization
 OPTIMIZE = 0
 
-# Libraries
-LIBS = -lhd44780
+# no core/gcc
+# NO_CORELIB = 1
+
+# Extra libraries
+LIBS =
 
 include ../../mk/exe.mk

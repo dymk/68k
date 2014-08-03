@@ -13,21 +13,12 @@ CC   = m68k-elf-gcc
 AR   = m68k-elf-ar
 AS   = m68k-elf-as
 
-# Compiler and linker flags
 SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 include $(SELF_DIR)/common.mk
 
 CFLAGS  = -fno-pic -O3 -nostartfiles -nostdinc -nostdlib -m68000 -std=c99 -fno-builtin $(INCPATHS)
 ASFLAGS = -march=68000 -mcpu=68000
 ARFLAGS = -ar rcs $(LIB)
-
-# List of source files
-
-SRC_C=$(wildcard *.c)
-SRC_S=$(wildcard *.s)
-
-OBJS=$(SRC_C:.c=.o) $(SRC_S:.s=.o)
-LSTS=$(SRC_C:.c=.lst)
 
 # clear suffixes
 .SUFFIXES:

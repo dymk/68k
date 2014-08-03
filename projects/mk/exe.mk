@@ -26,9 +26,8 @@ ifeq ($(CODE_LOC),rom)
     ULFLAGS += -f
 endif
 
-ifdef USE_KERNEL
-    LIBS+= -lkernel
-    # Only required if using kernel
+ifdef USE_MULTITASK
+    LIBS+= -lmultitask
     LDFLAGS += --defsym "__start_func=_kernel_start"
 endif
 
@@ -58,17 +57,9 @@ OBJCOPY = m68k-elf-objcopy
 SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 include $(SELF_DIR)/common.mk
 
-CFLAGS  += -O$(OPTIMIZE) -nostartfiles -nostdinc -nostdlib -m68000 -std=c99 -fno-builtin $(INCPATHS)
+CFLAGS  += -O$(OPTIMIZE) -nostartfiles -nostdinc -nostdlib -m68000 -std=c99 -Wall -pedantic -fno-builtin $(INCPATHS)
 LDFLAGS += -nostartfiles -nostdlib -A m68000 -T $(LINK_SCRIPT) $(LIBPATHS) --oformat srec
 ASFLAGS += -march=68000 -mcpu=68000
-
-# List of source files
-
-SRC_C = $(wildcard *.c)
-SRC_S = $(wildcard *.s)
-
-OBJS += $(SRC_C:.c=.o) $(SRC_S:.s=.o)
-LSTS  = $(SRC_C:.c=.lst)
 
 # clear suffixes
 .SUFFIXES:
@@ -94,7 +85,7 @@ run:	$(BIN)
 ifeq ($(CODE_LOC),rom)
 	@echo ERROR: Can only upload a ROM project!
 else
-	upload-strapper $(PRJ).bin
+	../../../uploader/uploader $(PRJ).bin
 endif
 
 upload: $(BIN)

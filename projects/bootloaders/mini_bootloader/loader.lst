@@ -1,0 +1,231 @@
+#NO_APP
+	.file	"loader.c"
+	.text
+	.align	2
+	.globl	putc
+	.type	putc, @function
+putc:
+	link.w %fp,#0
+	move.b 11(%fp),%d1
+.L3:
+	move.b 786477,%d0
+	jbge .L3
+	move.b %d1,786479
+	unlk %fp
+	rts
+	.size	putc, .-putc
+	.align	2
+	.globl	getc
+	.type	getc, @function
+getc:
+	link.w %fp,#0
+.L10:
+	move.b 786475,%d0
+	jbge .L10
+	move.b 786479,%d0
+	and.l #255,%d0
+	unlk %fp
+	rts
+	.size	getc, .-getc
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.LC0:
+	.string	"Booting in"
+.LC1:
+	.string	"3..."
+.LC2:
+	.string	"2..."
+.LC3:
+	.string	"1..."
+	.text
+	.align	2
+	.globl	command
+	.type	command, @function
+command:
+	link.w %fp,#0
+	move.l %a2,-(%sp)
+	move.l 8(%fp),%d0
+	cmp.l #194,%d0
+	jbeq .L18
+	jbhi .L21
+	cmp.l #193,%d0
+	jbne .L22
+	jbra .L17
+.L21:
+	cmp.l #195,%d0
+	jbeq .L19
+	cmp.l #203,%d0
+	jbne .L22
+	jbra .L20
+.L17:
+	moveq #1,%d0
+	jbra .L23
+.L18:
+	moveq #2,%d0
+	jbra .L23
+.L19:
+	moveq #4,%d0
+.L23:
+	or.l %d0,flags
+	jbra .L22
+.L20:
+	pea .LC0
+	lea lcd_puts,%a2
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC1
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC2
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC3
+	jbsr (%a2)
+	move.l jump_to,%a0
+#APP
+	jmp (%a0)
+
+#NO_APP
+	lea (16,%sp),%sp
+.L22:
+	move.l -4(%fp),%a2
+	unlk %fp
+	rts
+	.size	command, .-command
+	.section	.rodata.str1.1
+.LC4:
+	.string	"Ready to recieve"
+.LC5:
+	.string	"Programming..."
+	.text
+	.align	2
+	.globl	loader_start
+	.type	loader_start, @function
+loader_start:
+	link.w %fp,#0
+	move.l %a2,-(%sp)
+	move.l %d2,-(%sp)
+	jbsr lcd_init
+	move.b #2,819200
+	move.b 786461,%d0
+	and.b #15,%d0
+	move.b %d0,786461
+	move.b #1,786467
+	move.b 786461,%d0
+	or.b #16,%d0
+	move.b %d0,786461
+	move.b #-120,786473
+	move.b #1,786475
+	move.b #1,786477
+	move.b #3,819200
+	move.l #8192,jump_to
+	move.l #8192,write_to
+	pea .LC4
+	lea lcd_puts,%a2
+	jbsr (%a2)
+	clr.b %d2
+.L44:
+	addq.l #4,%sp
+.L46:
+	move.b 786475,%d0
+	jbge .L46
+	move.b 786479,%d1
+	move.b %d1,819200
+	move.b 786433,%d0
+	btst #0,%d0
+	jbne .L27
+	cmp.b #-62,%d1
+	jbeq .L31
+	jbhi .L34
+	cmp.b #-63,%d1
+	jbne .L29
+	jbra .L30
+.L34:
+	cmp.b #-61,%d1
+	jbeq .L32
+	cmp.b #-53,%d1
+	jbne .L29
+	jbra .L33
+.L30:
+	moveq #1,%d0
+	jbra .L45
+.L31:
+	moveq #2,%d0
+	jbra .L45
+.L32:
+	moveq #4,%d0
+.L45:
+	or.l %d0,flags
+	jbra .L29
+.L33:
+	pea .LC0
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC1
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC2
+	jbsr (%a2)
+#APP
+	move.l #87000,%d0
+1: subi.l #1, %d0
+bne 1b
+
+#NO_APP
+	pea .LC3
+	jbsr (%a2)
+	move.l jump_to,%a0
+#APP
+	jmp (%a0)
+
+#NO_APP
+	lea (16,%sp),%sp
+	jbra .L29
+.L27:
+	move.l write_to,%a0
+	move.b %d1,(%a0)+
+	move.l %a0,write_to
+.L35:
+	move.b 786477,%d0
+	jbge .L35
+	move.b %d1,786479
+.L29:
+	tst.b %d2
+	jbne .L46
+	pea .LC5
+	jbsr (%a2)
+	moveq #1,%d2
+	jbra .L44
+	nop
+	.size	loader_start, .-loader_start
+	.local	write_to
+	.comm	write_to,4,2
+	.local	jump_to
+	.comm	jump_to,4,2
+	.local	flags
+	.comm	flags,4,2
+	.ident	"GCC: (GNU) 4.2.4"
