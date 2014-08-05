@@ -4,7 +4,7 @@
 
 void puts(char *str) {
     while (*str != 0)
-        putc(*str++);
+        putc_sync(*str++);
 }
 
 

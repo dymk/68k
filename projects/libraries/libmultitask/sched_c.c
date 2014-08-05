@@ -35,20 +35,20 @@ void print_task_states() {
 }
 
 void end_mt_init() {
-    printf("mt_init_ reached end. halting.");
+    puts("mt_init_ reached end. halting.");
     while(true) {}
 }
 void end_on_trap0(uint8_t num) {
-    printf("invalid trap 0 call: %d. halting.\n", num);
+    puts("invalid trap 0 call: ");
+    putc(num + '0');
+    puts(". halting.\n");
+
     while(true) {}
 }
 void ct_no_more_tasks() {
-    printf("No more tasks in list! halting.");
+    puts("No more tasks in list! halting.");
     while(true) {}
 }
 void task_return_debug_msg() {
-    printf("Task returned, running trap 0\n");
-}
-void task_return_debug_msg2(uint32_t task_addr) {
-    printf("Another task is going to run: %lx\n", task_addr);
+    puts("Task returned, running trap 0\n");
 }

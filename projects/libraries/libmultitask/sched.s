@@ -152,12 +152,6 @@ done_with_life_fmt_str:   .asciz "Done with all tasks, looping forever\n"
 | usermode
 .global mt_init_
 mt_init_:
-
-  | start serial comms
-  move.l #0, -(%sp)
-  jsr serial_start
-  addq.l #4, %sp
-
   | use GPIO pin 1 as the indicator
   bset.b #1, (MFP_DDR)
 
@@ -180,22 +174,22 @@ mt_init_:
   | install handler for timer D vector
   | timer D's low nibble is 0x4, so MFP_VR | (timer d) = 0x44
   | so install handler at (0x44 * 4)
-  move.l  #0, %d0
-  move.b  (MFP_VR), %d0
-  addq.l  #0x4, %d0
-  lsl.l   #0x2, %d0
-  movea.l %d0,  %a0
-  move.l  #on_timer_d, (%a0)
+  | move.l  #0, %d0
+  | move.b  (MFP_VR), %d0
+  | addq.l  #0x4, %d0
+  | lsl.l   #0x2, %d0
+  | movea.l %d0,  %a0
+  | move.l  #on_timer_d, (%a0)
 
   | install trap 0 vector
   move.l #on_trap0, 0x80
 
   | initialize timer D to drive millis_vect
   | 3.6864mhz, 200 prescaler, 184 data is ~ a 100hz interrupt
-  move.b #255,  (MFP_TDDR)
-  ori.b  #0x07, (MFP_TCDCR)
-  ori.b  #0x10, (MFP_IMRB)
-  ori.b  #0x10, (MFP_IERB)
+  | move.b #255,  (MFP_TDDR)
+  | ori.b  #0x07, (MFP_TCDCR)
+  | ori.b  #0x10, (MFP_IMRB)
+  | ori.b  #0x10, (MFP_IERB)
 
   move.b #0xA4, (TIL311)
 
@@ -253,8 +247,9 @@ create_task_:
   move.l %a1, (in_use_tasks)
   move.l %d2, (%a1, ts_offset_next)
 
-  | set up task's program counter
+  | set up task's program counter and status flags
   move.l %a0, (%a1, ts_offset_pc)
+  move.w #0,  (%a1, ts_offset_flags)
 
   | set up task's stack (with return handler)
   move.l (%a1, ts_offset_stack), %a0
@@ -341,6 +336,6 @@ _tr_found_current_task:
   cmpa.l #0, %a0
   beq _fatal_no_more_tasks
 
-  | why indeed there is, execute it
+  | why indeed there is, switch to it
   bra run_task_
 
