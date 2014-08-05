@@ -29,21 +29,26 @@
 .set mt_time, 0x400
 
 | pointer to currently scheduled task (longword)
+.global current_task
 .set current_task, 0x404
 
 | Pointer to the list of free task structs
+.global free_tasks
 .set free_tasks,   0x408
 
-| Task structs, used to tracking current task state
-.set task_states,     0x40C
+| List of tasks already in use
+.global in_use_tasks
+.set in_use_tasks, 0x40C
+
+| Memory area where task structs reside,
+.global task_state_structs
+.set task_state_structs,     0x410
 
 | struct task_state_t {
 |   uint8_t  state;     // Task state information (currently unused)
 |     - bit 0-7: unused
 |   uint8_t  task_idx;  // Quick lookup of this task's index in the struct array
 |   uint16_t flags;     // status/CC flags
-|
-|   uint8_t _padding[1];
 |
 |   // Pointer to next task in the list (last is null)
 |   uint32_t next;
@@ -68,21 +73,34 @@
 .set ts_offset_end,   80
 | total size (ts_offset_end): 80 (0x4C) bytes
 
+.global ts_offset_state
+.global ts_offset_idx
+.global ts_offset_flags
+.global ts_offset_next
+.global ts_offset_stack
+.global ts_offset_pc
+.global ts_offset_d
+.global ts_offset_a
+.global ts_offset_sp
+.global ts_offset_end
+
+.extern init_task_states
 
 | 38 task structs total (at 80 bytes per task state struct)
-.set max_num_tasks, (0x1000 - task_states) / ts_offset_end
+.global max_num_tasks
+.set max_num_tasks, (0x1000 - task_state_structs) / ts_offset_end
 
 | 4096 default stack size (including the kernel)
 .set task_stack_size,  0x1000
-.extern __stack_start
-.set task_stack_start, __stack_start - task_stack_size
+| using this seems to cause the linker to not see task_stack_start
+| .extern __stack_start
+| .set task_stack_start, __stack_start-task_stack_size
+.set task_stack_start, 0x80000-task_stack_size
+.set total_ts_size, max_num_tasks*ts_offset_end
 
-| Options that on_trap0 responds to
-| with args in %d0 and %a0
-.set TRAP_CREATE_TASK, 0
-.set TRAP_TASK_RETURNED, 1
-| not implemented yet
-| .set TRAP_YIELD,       2
+.global task_stack_size
+.global total_ts_size
+.global task_stack_start
 
 .data
 .align 1
@@ -98,7 +116,7 @@
   addq.l #4, %sp
 .endm
 
-.macro statled_on
+.macro startled_on
   bset.b #1, (MFP_GPDR)
 .endm
 .macro statled_off
@@ -109,6 +127,10 @@
   statled_off
   sei
   rte
+.endm
+.macro enter_scheduler
+  startled_on
+  cli
 .endm
 
 .macro sei
@@ -141,12 +163,17 @@ mt_init_:
 
   move.b #0xA1, (TIL311)
 
+  | reference the symbol so it's not dropped by the linker
+  move.l #task_stack_start, %d0
+
   | initialize scheduler state
-  move.l #0,           (mt_time)
-  move.l #0,           (current_task)
-  move.l #task_states, (free_tasks)
-  jsr init_task_structs
-  | jsr inspect_task_state
+  move.l #0,            (mt_time)
+  move.l #0,            (current_task)
+  move.l #0,            (in_use_tasks)
+  jsr init_task_states
+  move.l #task_state_structs, (free_tasks)
+
+  | jsr print_task_states
 
   move.b #0xA2, (TIL311)
 
@@ -173,293 +200,147 @@ mt_init_:
   move.b #0xA4, (TIL311)
 
   | Start the initial task: main()
+  move.b  #trap0_code_create_task, %d0
   movea.l #main, %a0
-  move.b  #TRAP_CREATE_TASK, %d0
   trap #0
 
   | should never reach this
+  .extern end_mt_init
+  jsr end_mt_init
   illegal
 
-| handler for timer D interrupt
 on_timer_d:
-  statled_on
-  cli
-
-  | save current task's a0
-  move.l %a0, -(%sp)
-  move.l (current_task), %a0
-
-  | no more tasks, just return
-  cmpa.l #0, %a0
-  bne _otd_have_current_task
-  addq.l #4, %sp
-  move.b #0xAD, (TIL311)
-  bra _forever
-
-_otd_have_current_task:
-  | save the current context
-  movem.l %d0-%d7/%a0-%a6, (%a0, ts_offset_d) | save regs, a0 won't be correct
-  move.l (%sp)+,           (%a0, ts_offset_a) | save the correct a0
-
-  move.w (%sp), %d0
-  move.w %d0, (%a0, ts_offset_flags) | flags
-
-  move.l (%sp, 2), %d0
-  move.l %d0, (%a0, ts_offset_pc)    | PC
-
-  move.l %usp, %a1
-  move.l %a1, (%a0, ts_offset_sp)    | SP
-
-  | get next task to switch to
-  move.l (%a0, ts_offset_next), %a1
-  cmpa.l #0, %a1
-  beq _otd_at_last_task
-
-  | not at last task, set %a0 to next task
-  move.l (%a0, ts_offset_next), %a0
-
-  bra _otd_found_next_task
-
-_otd_at_last_task:
-  | at the last task in the list, set current_task to first task
-  move.l (task_states), %a0
-
-_otd_found_next_task:
-  move.l %a0, (current_task)
-  move.l %a0, %a1
-  bra switch_to_current_task_
-
-| handler for trap0; e.g.
-on_trap0:
-  | don't interrupt while changing scheduler state
-  | means handlers must set or use ret_from_scheduler
-  cli
-  move.b #0xA5, (TIL311)
-
-  cmp.b #TRAP_CREATE_TASK, %d0
-  beq create_task_
-  cmp.b #TRAP_TASK_RETURNED, %d0
-  beq task_returned_
-
-  move.l %d0, -(%sp)
-  move.l #illegal_trapcode_fmt_str, -(%sp)
-  jsr printf
-  addq.l #8, %sp
-  bra _forever
-
-| Just loop. Forever. We'll never leave the comfort of the loop.
-_forever: bra _forever
-
-| C abi compatible task creation routine
-mt_create_task:
-  | entrypoint is the first param passed
-  movea.l (%sp, 4),          %a0
-  move.b  #TRAP_CREATE_TASK, %d0
-  trap #0
-  rts
-
-| Creates a new task
-| New task entrypoint in %a0
-create_task_:
-  | grab a struct from the freelist
-  movea.l (free_tasks), %a1
-  cmpa.l #0, %a1
-  bne _ct_has_free_task
-
-  | no more free tasks, display an error message
-  move.l #max_num_tasks, -(%sp)
-  move.l #no_more_tasks_fmt_str, -(%sp)
-  jsr printf
-  addq.l #4, %sp
-  move.b #0xE0, (TIL311)
-  bra _forever
-
-_ct_has_free_task:
-  | pop the free task off of the free_tasks list
-  move.l (%a1, ts_offset_next), %d0
-  move.l  %d0, (free_tasks)
-
-  | push it on the front of the used tasks list
-  move.l (task_states), %d0 | save running tasks list head
-  move.l %d0, (%a1, ts_offset_next) | set task's next pointer
-  move.l %a1, (task_states) | set task at the head of active tasks list
-
-  | set new task's sp, pc, and flags
-  move.l %a2, -(%sp)
-  move.l (%a1, ts_offset_stack), %a2
-  move.l #on_task_return_, -(%a2) | subroutine the task returns to
-  move.l (%sp)+, %a2
-
-  move.l %a2, (%a1, ts_offset_sp)    | SP
-  move.l %a0, (%a1, ts_offset_pc)    | PC
-  move.w #0,  (%a1, ts_offset_flags) | CC and status flags
-
-  | set as the current running task
-  move.l %a1, (current_task)
-
-  | run the new task
-  bra switch_to_current_task_
-
-| Move context to the current task
-| this should be jumped to directly, not called like a subroute
-| Expects the current task in %a1
-switch_to_current_task_:
-  | restore PC
-  move.l (%a1, ts_offset_pc), %a0
-  move.l %a0, (%sp, 2)
-
-  | restore CC/status flags
-  move.w (%a1, ts_offset_flags), %d0
-  move.w %d0, (%sp)
-
-  | restore USP
-  move.l (%a1, ts_offset_sp), %a0
-  move.l %a0, %usp
-
-  | restore all registers
-  movem.l (%a1, ts_offset_d), %d0-%d7/%a0-%a6
-
+  enter_scheduler
+  | currently just noop
   ret_from_scheduler
 
-| Function that tasks return to after returning
-| Just springboards into supervisor mode, and from there task_returned
-on_task_return_:
-  move #TRAP_TASK_RETURNED, %d0
+.set trap0_code_create_task,   0
+.set trap0_code_task_returned, 1
+
+| trap0 handler
+| delegates to various other labels to perform common tasks
+on_trap0:
+  enter_scheduler
+
+  | handler indicator is in %d0
+  cmp.b #trap0_code_create_task, %d0
+  bra create_task_
+
+  cmp.b #trap0_code_task_returned, %d0
+  bra task_return_
+
+  .extern end_on_trap0
+  move.l %d0, -(%sp)
+  jsr end_on_trap0
+  addq.l #4, %sp
+  illegal
+
+| Creates task, with entrypoint at %a0, and switches execution to it
+| not a subroutine; this should always be branched to
+create_task_:
+
+  | acquire a free task
+  move.l (free_tasks), %a1
+  cmpa.l #0, %a1
+  beq _fatal_no_more_tasks
+
+  | pop from front of the free tasks list
+  move.l (%a1, ts_offset_next), %d2
+  move.l %d2, (free_tasks)
+
+  | push to front of in use list
+  move.l (in_use_tasks), %d2
+  move.l %a1, (in_use_tasks)
+  move.l %d2, (%a1, ts_offset_next)
+
+  | set up task's program counter
+  move.l %a0, (%a1, ts_offset_pc)
+
+  | set up task's stack (with return handler)
+  move.l (%a1, ts_offset_stack), %a0
+  move.l #task_return, -(%a0)
+  move.l %a0, (%a1, ts_offset_sp)
+
+  | move execution to the task
+  move.l %a1, %a0
+  bra run_task_
+
+| loads a task's context and returns into it
+| not a subroutine, should be jumped to directly
+| expects task to switch to in %a0
+run_task_:
+  move.l %a0, (current_task)
+
+  | set up status, pc, and sp regs
+  move.w (%a0, ts_offset_flags), %d0
+  move.w %d0, (%sp)    | CC and status
+  move.l (%a0, ts_offset_pc), %d0
+  move.l %d0, (%sp, 2) | PC
+  move.l (%a0, ts_offset_sp), %a1
+  move.l %a1, %usp     | SP
+
+  | restore registers
+  movem.l (%a0, ts_offset_d), %d0-%d7/%a0-%a6
+
+  | done, `rte' to execute task
+  ret_from_scheduler
+
+| fatal error label
+_fatal_no_more_tasks:
+  .extern ct_no_more_tasks
+  jsr ct_no_more_tasks
+  illegal
+
+| subroutine for handling a task returning
+| tears down current_task, and sets execution to
+| the first task in in_use_tasks
+task_return:
+  .extern task_return_debug_msg
+  jsr task_return_debug_msg
+
+  move.b #trap0_code_task_returned, %d0
   trap #0
 
-| handles task returning (in supervisor mode)
-task_returned_:
-  move.l %a2, -(%sp)
-  | find where 'current_task' is in the free tasks list
-  | %a0: task in the list being inspected
-  | %a1: the pointee to %a0
-  | %a2: addr of current task
-  move.l (task_states),  %a0
-  move.l #task_states,   %a1
-  move.l (current_task), %a2
+| returned from a task, switch to the next one, and tear this one down
+task_return_:
 
-_otr_check_if_found_ct:
-  cmpa.l %a2, %a0
-  beq _otr_found_current_task
+  move.l %a2, -(%sp)         | save a2
+  | find the thing that points to current_task, so it
+  | can be set to point to current_task->next
+  | lea    (in_use_tasks), %a0 | address pointing to %a1
+  move.l  #in_use_tasks, %a0 | address pointing to %a1
+  move.l (%a0),          %a1 | task to compare
+  move.l (current_task), %a2 | cut down on mem accesses
 
-  | nope, to to the next task
-  movea.l  %a0, %a1
-  movea.l (%a0, ts_offset_next), %a0
-  bra _otr_check_if_found_ct
+  cmpa.l %a1, %a2
+  beq _tr_found_current_task
 
-_otr_found_current_task:
-  | INVARIANT: %a0 must equal (current_task), %a2
-  | a0: -> current_task
-  | a1: -> pointer to current_task
+  | step to next task
+  | lea.l  (%a1, ts_offset_next), %a0
+  movea.l %a1, %a0
+  adda.l  #ts_offset_next, %a0
+  move.l (%a0),            %a1
 
-  | set the pointee to point to the current task's next pointer
-  move.l (%a0, ts_offset_next), %a2
-  move.l %a2, (%a1, ts_offset_next)
+_tr_found_current_task:
+  | INVARIANT: a1, a2 are equal, a0's value is the address of the memory
+  | location that points to a1/a2's value
 
-  | set the finished task's next pointer as the current task
-  | if null, set it to #task_states
-  cmpa.l #0, %a2
-  bne _otr_set_new_current_task
+  | remove task from in_use_tasks linked list
+  move.l (%a2, ts_offset_next), %a1
+  move.l %a1, (%a0)
 
-  | was the last task, set current task to head of tasks list
-  move.l #task_states, %a2
+  | push onto head of free_tasks linked list
+  move.l (free_tasks), %a1
+  move.l %a2, (free_tasks)
+  move.l %a1, (%a2, ts_offset_next)
 
-_otr_set_new_current_task:
-  move.l %a2, (current_task)
+  move.l (%sp)+, %a2         | restore a2
 
-  | push finished task to the front of the free tasks list
-  move.l (free_tasks), %d0
-  move.l %d0, (%a0, ts_offset_next)
-  move.l %a0, (free_tasks)
+  | if there are still tasks, execute the first one
+  move.l (in_use_tasks), %a0
+  cmpa.l #0, %a0
+  beq _fatal_no_more_tasks
 
-  | are there any more tasks to run anyways?
-  cmpa.l #0, %a2
-  bne _otr_run_swapped
+  | why indeed there is, execute it
+  bra run_task_
 
-  | nope, just loop forever
-  cli
-  move.b #0xAC, (TIL311)
-  bra _forever
-
-_otr_run_swapped:
-  move.l (%sp)+, %a2
-  put_str done_with_life_fmt_str
-
-  | switch context to the current task
-  bra switch_to_current_task_
-
-
-| Initialize the task's doubly linked list structure
-init_task_structs:
-  move.l %a2, -(%sp)
-
-  | for now, zero all task status memory
-  move.l #3053, %d0
-  movea.l #task_states, %a0
-
-_zero_loop:
-  move.b #0, (%a0)
-  adda.l #1,  %a0
-  dbra %d0, _zero_loop
-
-  movea.l #task_states, %a0
-
-  move.l  #0, %d1 | loop index counter
-  move.l  #max_num_tasks, %d0
-  subq.l  #1, %d0
-
-  | base of the first task's stack
-  movea.l #task_stack_start, %a2
-
-_init_task_state:
-  | initialize linked list of states
-  movea.l %a0, %a1
-  adda.w #ts_offset_end, %a1 | next pointer
-  move.l %a1, (%a0, ts_offset_next)
-
-  | set task index and stack starting position
-  move.b %d1, (%a0, ts_offset_idx)
-  move.l %a2, (%a0, ts_offset_stack)
-
-  | advance to next task state struct, idx, and stack position
-  adda.l #ts_offset_end, %a0
-  addq.b #1, %d1
-  suba.l #task_stack_size, %a2
-
-  | end loop
-  dbra %d0, _init_task_state
-
-  | nullify last task's next pointer
-  suba.l #ts_offset_end, %a0
-  move.l #0, (%a0, ts_offset_next)
-
-  move.l (%sp)+, %a2
-  rts
-
-inspect_task_state:
-  | lets inspect the structs for fun
-  move.l %a2, -(%sp)
-  movea.l (free_tasks), %a2
-_its_start_inspect:
-  cmpa.l #0, %a2
-  beq _its_end_inspect
-
-  movea.l (%a2, ts_offset_next), %a0   | next task addr
-  move.l %a0, -(%sp)
-  move.l (%a2, ts_offset_stack), %d0  | stack base addr
-  move.l %d0, -(%sp)
-  move.l %a2, -(%sp)                  | this task addr
-  clr.l %d0                           | task index number
-  move.b (%a2, ts_offset_idx), %d0
-  move.l %d0, -(%sp)
-
-  move.l #print_task_base_fmt_str, -(%sp)
-  jsr printf
-  adda.l #20, %sp
-
-  movea.l (%a2, ts_offset_next), %a2
-  bra _its_start_inspect
-_its_end_inspect:
-  move.l (%sp)+, %a2
-
-  rts

@@ -10,6 +10,7 @@ tests/
 *.l68
 *.s68
 *.map
+*.lst
 /projects/progs/**/*.bin
 /uploader/*.bin
 
