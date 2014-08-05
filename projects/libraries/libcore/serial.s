@@ -143,7 +143,7 @@ _rdy:
 | synchronous putc
 putc_sync:
 	btst #7, (TSR)               | test buffer empty (bit 7)
-    beq putc_sync                | Z=1 (bit = 0) ? branch
+	beq putc_sync                | Z=1 (bit = 0) ? branch
 	move.b (7,%sp), (UDR)		 | write char to buffer
 	rts
 

@@ -26,23 +26,11 @@ ifeq ($(CODE_LOC),rom)
     ULFLAGS += -f
 endif
 
-ifdef USE_MULTITASK
-    LIBS+= -lmultitask
-    LDFLAGS += --defsym "__start_func=_kernel_start"
-endif
 
-ifndef NO_CORELIB
-    LIBS += -lcore -lgcc
-endif
-
-STARTUP_SRC = ../../startup/$(CODE_LOC).s
-STARTUP_OBJ = ../../startup/$(CODE_LOC).o
+_STARTUP_SRC = ../../startup/$(CODE_LOC).s
+_STARTUP_OBJ = ../../startup/$(CODE_LOC).o
 ifndef NO_STARTUP
-    OBJS += $(STARTUP_OBJ)
-endif
-
-ifndef LINK_SCRIPT
-    LINK_SCRIPT = ../../startup/$(CODE_LOC).ld
+    OBJS += $(_STARTUP_OBJ)
 endif
 
 # Program names
@@ -57,25 +45,53 @@ OBJCOPY = m68k-elf-objcopy
 SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 include $(SELF_DIR)/common.mk
 
-CFLAGS  += -O$(OPTIMIZE) -nostartfiles -nostdinc -nostdlib -m68000 -std=c99 -Wall -pedantic -fno-builtin $(INCPATHS)
-LDFLAGS += -nostartfiles -nostdlib -A m68000 -T $(LINK_SCRIPT) $(LIBPATHS) --oformat srec
-ASFLAGS += -march=68000 -mcpu=68000
+ifdef USE_MULTITASK
+    LIBS+= --whole-archive -lmultitask  --no-whole-archive
+    LDFLAGS += --defsym "__start_func=mt_init_"
+endif
+
+ifndef NO_CORELIB
+    LIBS += -lcore -lgcc
+endif
+
+ifndef LINK_SCRIPT
+    LINK_SCRIPT = ../../startup/$(CODE_LOC).ld
+    LDFLAGS += -T $(LINK_SCRIPT)
+endif
+
+LDFLAGS += -nostartfiles -nostdlib -A m68000 --oformat srec
 
 # clear suffixes
 .SUFFIXES:
 .SUFFIXES: .c .o .lst .s
 
-####### TARGETS ########
+# all libraries that will be passed to the linker, with the `-l' trimmed off
+_ALL_LIBNAMES   = $(subst -l,,$(filter -l%,$(LIBS)))
+# the path to the libraries (with `lib' prefix added)
+_LIB_PATHS     := $(addprefix ../../libraries/lib,$(_ALL_LIBNAMES))
+# all library directories that already exist
+_EXISTING_DIRS := $(wildcard ../../libraries/*)
+# the intersection of _LIB_PATHS and _EXISTING_DIRS, e.g. the paths to
+# the libraries that exist, and are used
+USED_LIB_DIRS   = $(filter $(_EXISTING_DIRS),$(_LIB_PATHS))
 
-all:	$(BIN)
+# debugging
+# $(info Included libraries: $(_LIB_PATHS))
+# $(info Existing directories: $(_EXISTING_DIRS))
+# $(info Dirs to rebuild: $(USED_LIB_DIRS))
+
+####### TARGETS ########
+all: $(BIN)
+
+# static pattern rule
+# https://www.gnu.org/software/make/manual/make.html#Static-Pattern
+.PHONY: $(USED_LIB_DIRS)
+$(USED_LIB_DIRS): % :
+	$(info Ensuring $@ is up to date)
+	@make -C $@
 
 clean:
 	$(RM) $(OBJS) $(BIN) $(LSTS) $(PRJ).bin $(PRJ).l68 $(PRJ).map
-
-commit:
-	git diff
-	git add .
-	git commit -a
 
 # Open source in default editor, on mac.
 open:
@@ -83,7 +99,7 @@ open:
 
 run:	$(BIN)
 ifeq ($(CODE_LOC),rom)
-	@echo ERROR: Can only upload a ROM project!
+	@echo ERROR: Can only upload a RAM project!
 else
 	../../../uploader/uploader $(PRJ).bin
 endif
@@ -94,8 +110,8 @@ upload: $(BIN)
 
 listing: $(LSTS)
 
-$(BIN): $(OBJS)
-	$(LD)  $(OBJS) $(LIBS) $(LDFLAGS) -o $(BIN) -Map $(PRJ).map
+$(BIN): $(USED_LIB_DIRS) $(wildcard ../../lib/*.a) $(OBJS)
+	$(LD) $(OBJS) $(LIBPATHS) $(LIBS) $(LDFLAGS) -o $(BIN) -Map $(PRJ).map
 	$(OBJCOPY) -I srec $(BIN) -O binary $(PRJ).bin
 	$(OBJDUMP) -D $(BIN) -m68000 > $(PRJ).l68
 	@echo

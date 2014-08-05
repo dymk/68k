@@ -91,7 +91,7 @@
 #ifndef __TFP_PRINTF__
 #define __TFP_PRINTF__
 
-//#define PRINTF_LONG_SUPPORT 1
+#define PRINTF_LONG_SUPPORT 1
 
 #include <stdarg.h>
 #include <stdio.h>

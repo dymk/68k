@@ -1,11 +1,8 @@
 #ifndef __MULTITASK_H__
 #define __MULTITASK_H__
 
-#include "stdlib.h"
-#include "common.h"
+// Creates a new thread of execution
+void mt_create_task(void (*task_func)());
 
-// system timer (ms since system boot)
-// Constant in the public API
-extern volatile const uint32_t mt_time;
-
+/* __MULTITASK_H__ */
 #endif

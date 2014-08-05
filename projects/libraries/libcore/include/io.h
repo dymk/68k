@@ -82,7 +82,8 @@
 enum { MFP_GPI0 = 0, MFP_GPI1, MFP_GPI2, MFP_GPI3, MFP_TIMERD, MFP_TIMERC,MFP_GPI4,MFP_GPI5, MFP_TIMERB,MFP_XMIT_ERR, MFP_XMIT_EMPTY, MFP_REC_ERR, MFP_CHAR_RDY, MFP_TIMERA, MFP_GPI6, MFP_GPI7 };
 // bit 7 - 4 copied from VR, bits 3 - 0 come from above
 
-#define MFP_INT 0x80
+// MFP's interrupts base starting number
+const extern uint8_t MFP_VR_VAL;
 
 #define GPIO(X) (GPDR & (1<<X))
 

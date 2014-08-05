@@ -27,17 +27,17 @@ ISR(ser_xmt_err)  {
 }
 
 void serial_start(uint8_t fast) {
-    __vectors.user[MFP_INT + MFP_CHAR_RDY - USER_ISR_START] =  fast ? (&_charRecISR_fast) : (&_charRecISR_safe);
-    __vectors.user[MFP_INT + MFP_XMIT_EMPTY - USER_ISR_START] =  &_charXmtISR;
-    __vectors.user[MFP_INT + MFP_REC_ERR - USER_ISR_START] = &ser_rec_err;
-    __vectors.user[MFP_INT + MFP_XMIT_ERR - USER_ISR_START] = &ser_xmt_err;
+    __vectors.user[MFP_VR_VAL + MFP_CHAR_RDY   - USER_ISR_START] =  fast ? (&_charRecISR_fast) : (&_charRecISR_safe);
+    __vectors.user[MFP_VR_VAL + MFP_XMIT_EMPTY - USER_ISR_START] =  &_charXmtISR;
+    __vectors.user[MFP_VR_VAL + MFP_REC_ERR    - USER_ISR_START] = &ser_rec_err;
+    __vectors.user[MFP_VR_VAL + MFP_XMIT_ERR   - USER_ISR_START] = &ser_xmt_err;
 
-    VR = MFP_INT;
+    VR = MFP_VR_VAL;
     IERA |= INT_REC_FULL | INT_REC_ERR | INT_XMIT_ERR | INT_XMIT_EMPTY;
     IMRA |= INT_REC_FULL | INT_REC_ERR | INT_XMIT_ERR;
 
     // baud rate generation
-    TCDR = 1;        // baud 28800
+    TCDR  = 1;       // baud 28800
     TCDCR &= 0xF; 	 // stop timer C
     TCDCR |= 1 << 4; // start timer C with prescaler of 4
 

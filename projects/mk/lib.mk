@@ -16,8 +16,6 @@ AS   = m68k-elf-as
 SELF_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 include $(SELF_DIR)/common.mk
 
-CFLAGS  = -fno-pic -O3 -nostartfiles -nostdinc -nostdlib -m68000 -std=c99 -fno-builtin $(INCPATHS)
-ASFLAGS = -march=68000 -mcpu=68000
 ARFLAGS = -ar rcs $(LIB)
 
 # clear suffixes

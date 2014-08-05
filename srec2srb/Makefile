@@ -44,10 +44,10 @@ debug:  clean all
 
 # Open source in default editor, on mac.
 open:
-	-open $(SRCS) 
+	-open $(SRCS)
 
-$(BIN): $(OBJS)    
-	$(CC) $(LDFLAGS) $(LIBS) -o $(BIN) $(OBJS) 
+$(BIN): $(OBJS)
+	$(CC) $(LDFLAGS) $(LIBS) -o $(BIN) $(OBJS)
 
 .o:
 	$(CPP) $(CXXFLAGS) -c -o $@ $<

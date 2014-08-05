@@ -1,22 +1,22 @@
 /*
  File: printf.c
- 
+
  Copyright (C) 2004  Kustaa Nyholm
- 
+
  This library is free software; you can redistribute it and/or
  modify it under the terms of the GNU Lesser General Public
  License as published by the Free Software Foundation; either
  version 2.1 of the License, or (at your option) any later version.
- 
+
  This library is distributed in the hope that it will be useful,
  but WITHOUT ANY WARRANTY; without even the implied warranty of
  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  Lesser General Public License for more details.
- 
+
  You should have received a copy of the GNU Lesser General Public
  License along with this library; if not, write to the Free Software
  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- 
+
  */
 
 #include "printf.h"
@@ -125,10 +125,10 @@ static void putchw(void* putp,putcf putf,int n, char z, char* bf)
 void tfp_format(void* putp,putcf putf,char *fmt, va_list va)
 {
     char bf[12];
-    
+
     char ch;
-    
-    
+
+
     while ((ch=*(fmt++))) {
         if (ch!='%')
             putf(putp,ch);
@@ -202,7 +202,7 @@ abort:;
 
 
 void printf_putc(void*p, char ch) {
-	putc(ch);
+	putc_sync(ch);
 }
 
 void printf(char *fmt, ...)
