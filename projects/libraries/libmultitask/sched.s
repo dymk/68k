@@ -40,13 +40,20 @@
 .global in_use_tasks
 .set in_use_tasks, 0x40C
 
+| global scheduler flags; all byets
+.set is_swapping,    0x410
+.set __reserved_one, 0x411
+.set __reserved_two, 0x412
+.set __reserved_thr, 0x413
+
 | Memory area where task structs reside,
 .global task_state_structs
-.set task_state_structs,     0x410
+.set task_state_structs,     0x414
 
 | struct task_state_t {
 |   uint8_t  state;     // Task state information (currently unused)
-|     - bit 0-7: unused
+|     - bit 0  : in a critical section?
+|     - bit 1-7: unused
 |   uint8_t  task_idx;  // Quick lookup of this task's index in the struct array
 |   uint16_t flags;     // status/CC flags
 |
@@ -57,9 +64,9 @@
 |   uint32_t stack;
 |
 |   uint32_t pc;        // Program counter
+|   uint32_t sp;        // Stack pointer (%a7)
 |   uint32_t d[8];      // Data registers
 |   uint32_t a[7];      // Address registers
-|   uint32_t sp;        // Stack pointer (%a7)
 | }
 .set ts_offset_state, 0
 .set ts_offset_idx,   1
@@ -67,10 +74,13 @@
 .set ts_offset_next,  4
 .set ts_offset_stack, 8
 .set ts_offset_pc,    12
-.set ts_offset_d,     16
-.set ts_offset_a,     48
-.set ts_offset_sp,    76
+.set ts_offset_sp,    16
+.set ts_offset_d,     20
+.set ts_offset_a,     52
 .set ts_offset_end,   80
+
+.set ts_status_incrit, 0
+
 | total size (ts_offset_end): 80 (0x4C) bytes
 
 .global ts_offset_state
@@ -84,7 +94,7 @@
 .global ts_offset_sp
 .global ts_offset_end
 
-.extern init_task_states
+|.extern init_task_states
 
 | 38 task structs total (at 80 bytes per task state struct)
 .global max_num_tasks
@@ -101,6 +111,12 @@
 .global task_stack_size
 .global total_ts_size
 .global task_stack_start
+
+| Trap codes
+.set trap0_code_create_task,    0
+.set trap0_code_task_returned,  1
+.set trap0_code_enter_critical, 2
+.set trap0_code_exit_critical,  3
 
 .data
 .align 1
@@ -133,11 +149,28 @@
   cli
 .endm
 
+.macro end_trace
+  ori.w #0x8000, %sr
+.endm
+.macro start_trace
+  andi.w #0x7FFF, %sr
+.endm
+
 .macro sei
     and.w #0xF8FF, %SR
 .endm
 .macro cli
     ori.w #0x700, %SR
+.endm
+
+.macro enable_timer
+  ori.b  #0x10, (MFP_IERB)
+.endm
+.macro disable_timer
+  cli
+  andi.b #0xCF, (MFP_IERB)
+  andi.b #0xCF, (MFP_IMRB)
+  sei
 .endm
 
 | Format strs
@@ -155,7 +188,10 @@ mt_init_:
   | use GPIO pin 1 as the indicator
   bset.b #1, (MFP_DDR)
 
-  move.b #0xA1, (TIL311)
+  | init serial comms (so host can signal CPU reset)
+  move.l #0, -(%sp)
+  jsr serial_start
+  add.l #4, %sp
 
   | reference the symbol so it's not dropped by the linker
   move.l #task_stack_start, %d0
@@ -167,31 +203,28 @@ mt_init_:
   jsr init_task_states
   move.l #task_state_structs, (free_tasks)
 
+  | Useful for debugging
   | jsr print_task_states
-
-  move.b #0xA2, (TIL311)
 
   | install handler for timer D vector
   | timer D's low nibble is 0x4, so MFP_VR | (timer d) = 0x44
   | so install handler at (0x44 * 4)
-  | move.l  #0, %d0
-  | move.b  (MFP_VR), %d0
-  | addq.l  #0x4, %d0
-  | lsl.l   #0x2, %d0
-  | movea.l %d0,  %a0
-  | move.l  #on_timer_d, (%a0)
+  move.l  #0, %d0
+  move.b  (MFP_VR), %d0
+  addq.l  #0x4, %d0
+  lsl.l   #0x2, %d0
+  movea.l %d0,  %a0
+  move.l  #on_timer_d, (%a0)
 
   | install trap 0 vector
   move.l #on_trap0, 0x80
 
   | initialize timer D to drive millis_vect
   | 3.6864mhz, 200 prescaler, 184 data is ~ a 100hz interrupt
-  | move.b #255,  (MFP_TDDR)
-  | ori.b  #0x07, (MFP_TCDCR)
-  | ori.b  #0x10, (MFP_IMRB)
-  | ori.b  #0x10, (MFP_IERB)
-
-  move.b #0xA4, (TIL311)
+  move.b #184,  (MFP_TDDR)
+  ori.b  #0x07, (MFP_TCDCR)
+  ori.b  #0x10, (MFP_IMRB)
+  enable_timer
 
   | Start the initial task: main()
   move.b  #trap0_code_create_task, %d0
@@ -203,13 +236,71 @@ mt_init_:
   jsr end_mt_init
   illegal
 
+| TODO: check if there's only one task running, and if so, return
 on_timer_d:
-  enter_scheduler
-  | currently just noop
-  ret_from_scheduler
 
-.set trap0_code_create_task,   0
-.set trap0_code_task_returned, 1
+  | incr timer
+  |enter_scheduler
+  startled_on
+  addq.l #1, (mt_time)
+
+  | atomic check if the CPU is already swapping a task
+  tas (is_swapping)
+  bne _otd_reallyearlyret | early return if we're swapping
+
+  | prevent any other interrupts from happening past this point
+  cli
+
+  | we're gonna need these
+  movem.l %d0/%a0, -(%sp)
+
+  | find the next task to execute
+  move.l (current_task), %a0
+  btst.b #ts_status_incrit, (%a0, ts_offset_state)
+  bne _otd_earlyret | return if the task is in a critical section
+
+  | nope, use the first task in in_use_tasks. So now, save the context of the
+  | current task. have to restore some registers first.
+
+  movem.l (%sp)+, %d0 | restore old task's d0
+  movem.l %d0-%d7/%a0-%a6, (%a0, ts_offset_d) | a0 is going to be jumk
+  move.l (%sp)+, %a1  | restore old task's a0
+  move.l %a1, (%a0, ts_offset_a)              | a0 is now correct
+
+  | save flags/pc/sp
+  move.w (%sp), %d0    | CC and status flags
+  move.w %d0, (%a0, ts_offset_flags)
+  move.l (%sp, 2), %d0 | PC
+  move.l %d0, (%a0, ts_offset_pc)
+  move.l %usp, %a1     | SP
+  move.l %a1, (%a0, ts_offset_sp)
+
+  | alright, context saved, and current task is in %a0
+  | get the next task to run
+  move.l (%a0, ts_offset_next), %a0
+  cmpa.l #0, %a0
+  bne _otd_run_task
+
+  | was at end of in use tasks linked list; go back to front
+  move.l (in_use_tasks), %a0
+
+_otd_run_task:
+  | | | | | Debugging
+  | move.l %a0, -(%sp)
+  | move.l (current_task), %a0
+  | move.l %a0, -(%sp)
+  | .extern debug_switched_task
+  | jsr debug_switched_task
+  | add.l #4, %sp
+  | move.l (%sp)+, %a0
+  bra run_task_
+
+_otd_earlyret:
+  movem.l (%sp)+, %d0/%a0
+  clr.b (is_swapping)
+
+_otd_reallyearlyret:
+  ret_from_scheduler
 
 | trap0 handler
 | delegates to various other labels to perform common tasks
@@ -218,10 +309,16 @@ on_trap0:
 
   | handler indicator is in %d0
   cmp.b #trap0_code_create_task, %d0
-  bra create_task_
+  beq create_task_
 
   cmp.b #trap0_code_task_returned, %d0
-  bra task_return_
+  beq task_return_
+
+  cmp.b #trap0_code_enter_critical, %d0
+  beq enter_critical_
+
+  cmp.b #trap0_code_exit_critical, %d0
+  beq exit_critical_
 
   .extern end_on_trap0
   move.l %d0, -(%sp)
@@ -232,7 +329,30 @@ on_trap0:
 | Creates task, with entrypoint at %a0, and switches execution to it
 | not a subroutine; this should always be branched to
 create_task_:
+  | if there's already a task running, save its context
+  cmp.l #0, (current_task)
+  beq _ct_saved_current_task
 
+  | save %a0 as it contains the entrypoint
+  move.l %a0, -(%sp)
+  move.l (current_task), %a0
+
+  | the saved a0 is going to be basically garbage, although that shouldn't
+  | matter, because if there's a current task, it made a function call to
+  | trigger create_task_ (via a trap #0)
+  movem.l %d0-%d7/%a0-%a6, (%a0, ts_offset_d)
+
+  | CC and PC at 4 and 6, as we incr'd the sp when saving %a0
+  move.w (%sp, 4), %d0    | CC and status flags
+  move.w %d0, (%a0, ts_offset_flags)
+  move.l (%sp, 6), %d0 | PC
+  move.l %d0, (%a0, ts_offset_pc)
+  move.l %usp, %a1     | SP
+  move.l %a1, (%a0, ts_offset_sp)
+
+  move.l (%sp)+, %a0 | restore entrypoint
+
+_ct_saved_current_task:
   | acquire a free task
   move.l (free_tasks), %a1
   cmpa.l #0, %a1
@@ -258,7 +378,8 @@ create_task_:
 
   | move execution to the task
   move.l %a1, %a0
-  bra run_task_
+  | uncomment if somethign comes between this and run_task_
+  | bra run_task_
 
 | loads a task's context and returns into it
 | not a subroutine, should be jumped to directly
@@ -277,8 +398,14 @@ run_task_:
   | restore registers
   movem.l (%a0, ts_offset_d), %d0-%d7/%a0-%a6
 
-  | done, `rte' to execute task
+  | done, `rte' to execute task, and clear swapping flag
+  clr.b (is_swapping)
   ret_from_scheduler
+
+| nonfatal, just indicate that there are no more tasks to run
+_no_more_tasks:
+  disable_timer
+  move.l #0, (current_task)
 
 | fatal error label
 _fatal_no_more_tasks:
@@ -290,16 +417,14 @@ _fatal_no_more_tasks:
 | tears down current_task, and sets execution to
 | the first task in in_use_tasks
 task_return:
-  .extern task_return_debug_msg
-  jsr task_return_debug_msg
-
+  | | | | Debugging
+  | .extern task_return_debug_msg1
+  | jsr task_return_debug_msg1
   move.b #trap0_code_task_returned, %d0
   trap #0
 
 | returned from a task, switch to the next one, and tear this one down
 task_return_:
-
-  move.l %a2, -(%sp)         | save a2
   | find the thing that points to current_task, so it
   | can be set to point to current_task->next
   | lea    (in_use_tasks), %a0 | address pointing to %a1
@@ -307,18 +432,19 @@ task_return_:
   move.l (%a0),          %a1 | task to compare
   move.l (current_task), %a2 | cut down on mem accesses
 
+_tr_find_current_task:
   cmpa.l %a1, %a2
   beq _tr_found_current_task
 
   | step to next task
-  | lea.l  (%a1, ts_offset_next), %a0
-  movea.l %a1, %a0
-  adda.l  #ts_offset_next, %a0
-  move.l (%a0),            %a1
+  lea.l  (%a1, ts_offset_next), %a0
+  move.l (%a0),                 %a1
+  bra _tr_find_current_task
 
 _tr_found_current_task:
-  | INVARIANT: a1, a2 are equal, a0's value is the address of the memory
-  | location that points to a1/a2's value
+  | INVARIANT: a1, a2 are equal, and a0 points to a1/a2
+  cmp.l (%a0), %a2
+  bne _tr_fatal_invariant_failure
 
   | remove task from in_use_tasks linked list
   move.l (%a2, ts_offset_next), %a1
@@ -329,13 +455,100 @@ _tr_found_current_task:
   move.l %a2, (free_tasks)
   move.l %a1, (%a2, ts_offset_next)
 
-  move.l (%sp)+, %a2         | restore a2
-
   | if there are still tasks, execute the first one
   move.l (in_use_tasks), %a0
   cmpa.l #0, %a0
-  beq _fatal_no_more_tasks
+  beq _no_more_tasks
 
   | why indeed there is, switch to it
   bra run_task_
 
+  | jumped to on what should be an invariant failure - that %a0 pointed to
+  | the address %a1/%a2
+_tr_fatal_invariant_failure:
+  trap #15
+  move.l %a0, -(%sp)
+  move.l %a2, -(%sp)
+  .extern fatal_invariant_failure
+  jsr fatal_invariant_failure
+  add.l #8, %sp
+  illegal
+
+|.global init_task_states
+init_task_states:
+  move.l %a2, -(%sp)
+
+  | for now, zero all task status memory
+  move.l #task_state_structs, %a0
+  move.l #total_ts_size,      %d0
+  subq.l #1, %d0
+
+  | zero out all task struct memory
+_its_clear:
+  move.b #0, (%a0)+
+  dbra %d0, _its_clear
+
+  movea.l #task_state_structs, %a0
+
+  move.l  #0, %d1 | loop index counter
+  move.l  #max_num_tasks, %d0
+  subq.l  #1, %d0
+
+  | base of the first task's stack
+  movea.l #task_stack_start, %a2
+
+_init_task_state:
+  | initialize linked list of states
+  movea.l %a0, %a1
+  adda.w #ts_offset_end, %a1 | next pointer
+  move.l %a1, (%a0, ts_offset_next)
+
+  | set task index and stack starting position
+  move.b %d1, (%a0, ts_offset_idx)
+  move.l %a2, (%a0, ts_offset_stack)
+
+  | advance to next task state struct, idx, and stack position
+  adda.l #ts_offset_end, %a0
+  addq.b #1, %d1
+  suba.l #task_stack_size, %a2
+
+  | end loop
+  dbra %d0, _init_task_state
+
+  | nullify last task's next pointer
+  suba.l #ts_offset_end, %a0
+  move.l #0, (%a0, ts_offset_next)
+
+  move.l (%sp)+, %a2
+  rts
+
+enter_critical_:
+  move.l (current_task), %a0
+  bset.b #ts_status_incrit, (%a0, ts_offset_state)
+  ret_from_scheduler
+
+exit_critical_:
+  move.l (current_task), %a0
+  bclr.b #ts_status_incrit, (%a0, ts_offset_state)
+  ret_from_scheduler
+
+.global mt_enter_critical
+mt_enter_critical:
+  move.b #trap0_code_enter_critical, %d0
+  trap #0
+  rts
+
+.global mt_exit_critical
+mt_exit_critical:
+  move.b #trap0_code_exit_critical, %d0
+  trap #0
+  rts
+
+| C abi compatible, usermode function to spawn a new task
+| and begin its execution
+.global mt_create_task
+mt_create_task:
+  move.l (%sp, 4), %a0
+  move.b #trap0_code_create_task, %d0
+  trap #0
+  rts

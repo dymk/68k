@@ -35,7 +35,7 @@ void print_task_states() {
 }
 
 void end_mt_init() {
-    puts("mt_init_ reached end. halting.");
+    puts("mt_init_ reached end. halting.\n");
     while(true) {}
 }
 void end_on_trap0(uint8_t num) {
@@ -46,9 +46,18 @@ void end_on_trap0(uint8_t num) {
     while(true) {}
 }
 void ct_no_more_tasks() {
-    puts("No more tasks in list! halting.");
+    puts("No more tasks in list! halting.\n");
     while(true) {}
 }
-void task_return_debug_msg() {
-    puts("Task returned, running trap 0\n");
+void task_return_debug_msg1() {
+    puts("A task returned\n");
+}
+void task_return_debug_msg2() {
+    puts("there's a task in in_use_tasks list, using that\n");
+}
+void fatal_invariant_failure(uint32_t task_ptr, uint32_t task_pointee) {
+    printf("task at $%lx wasn't pointed to from $%lx\n");
+}
+void debug_switched_task(uint32_t from, uint32_t to) {
+    printf("\n$%lx -> $%lx\n", from, to);
 }
