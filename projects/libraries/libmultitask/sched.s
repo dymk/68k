@@ -41,8 +41,8 @@
 .set in_use_tasks, 0x40C
 
 | global scheduler flags; all byets
-.set is_swapping,    0x410
-.set __reserved_one, 0x411
+.set is_swapping,    0x410 | currently in an interrupt, swapping?
+.set num_tasks,      0x411 | total number of running tasks
 .set __reserved_two, 0x412
 .set __reserved_thr, 0x413
 
@@ -173,12 +173,6 @@
   sei
 .endm
 
-| Format strs
-illegal_trapcode_fmt_str: .asciz "Illegal multitask trapcode used: %d\n"
-no_more_tasks_fmt_str:    .asciz "Reached maximum number of tasks: %d\n"
-print_task_base_fmt_str:  .asciz "Task with IDX %d (addr $%lx) has stack base: $%lx, next task: $%lx\n"
-done_with_life_fmt_str:   .asciz "Done with all tasks, looping forever\n"
-
 .text
 .align 2
 | entrypoint for the scheduler, initialize state and execute `main' in
@@ -200,6 +194,10 @@ mt_init_:
   move.l #0,            (mt_time)
   move.l #0,            (current_task)
   move.l #0,            (in_use_tasks)
+  move.b #0,            (is_swapping)
+  move.b #0,            (num_tasks)
+
+  | zero mem and set up linked list of tasks
   jsr init_task_states
   move.l #task_state_structs, (free_tasks)
 
@@ -236,72 +234,6 @@ mt_init_:
   jsr end_mt_init
   illegal
 
-| TODO: check if there's only one task running, and if so, return
-on_timer_d:
-
-  | incr timer
-  |enter_scheduler
-  startled_on
-  addq.l #1, (mt_time)
-
-  | atomic check if the CPU is already swapping a task
-  tas (is_swapping)
-  bne _otd_reallyearlyret | early return if we're swapping
-
-  | prevent any other interrupts from happening past this point
-  cli
-
-  | we're gonna need these
-  movem.l %d0/%a0, -(%sp)
-
-  | find the next task to execute
-  move.l (current_task), %a0
-  btst.b #ts_status_incrit, (%a0, ts_offset_state)
-  bne _otd_earlyret | return if the task is in a critical section
-
-  | nope, use the first task in in_use_tasks. So now, save the context of the
-  | current task. have to restore some registers first.
-
-  movem.l (%sp)+, %d0 | restore old task's d0
-  movem.l %d0-%d7/%a0-%a6, (%a0, ts_offset_d) | a0 is going to be jumk
-  move.l (%sp)+, %a1  | restore old task's a0
-  move.l %a1, (%a0, ts_offset_a)              | a0 is now correct
-
-  | save flags/pc/sp
-  move.w (%sp), %d0    | CC and status flags
-  move.w %d0, (%a0, ts_offset_flags)
-  move.l (%sp, 2), %d0 | PC
-  move.l %d0, (%a0, ts_offset_pc)
-  move.l %usp, %a1     | SP
-  move.l %a1, (%a0, ts_offset_sp)
-
-  | alright, context saved, and current task is in %a0
-  | get the next task to run
-  move.l (%a0, ts_offset_next), %a0
-  cmpa.l #0, %a0
-  bne _otd_run_task
-
-  | was at end of in use tasks linked list; go back to front
-  move.l (in_use_tasks), %a0
-
-_otd_run_task:
-  | | | | | Debugging
-  | move.l %a0, -(%sp)
-  | move.l (current_task), %a0
-  | move.l %a0, -(%sp)
-  | .extern debug_switched_task
-  | jsr debug_switched_task
-  | add.l #4, %sp
-  | move.l (%sp)+, %a0
-  bra run_task_
-
-_otd_earlyret:
-  movem.l (%sp)+, %d0/%a0
-  clr.b (is_swapping)
-
-_otd_reallyearlyret:
-  ret_from_scheduler
-
 | trap0 handler
 | delegates to various other labels to perform common tasks
 on_trap0:
@@ -320,6 +252,7 @@ on_trap0:
   cmp.b #trap0_code_exit_critical, %d0
   beq exit_critical_
 
+  | error, should never fall through this far
   .extern end_on_trap0
   move.l %d0, -(%sp)
   jsr end_on_trap0
@@ -366,6 +299,7 @@ _ct_saved_current_task:
   move.l (in_use_tasks), %d2
   move.l %a1, (in_use_tasks)
   move.l %d2, (%a1, ts_offset_next)
+  addq.b #1,  (num_tasks)
 
   | set up task's program counter and status flags
   move.l %a0, (%a1, ts_offset_pc)
@@ -378,29 +312,7 @@ _ct_saved_current_task:
 
   | move execution to the task
   move.l %a1, %a0
-  | uncomment if somethign comes between this and run_task_
-  | bra run_task_
-
-| loads a task's context and returns into it
-| not a subroutine, should be jumped to directly
-| expects task to switch to in %a0
-run_task_:
-  move.l %a0, (current_task)
-
-  | set up status, pc, and sp regs
-  move.w (%a0, ts_offset_flags), %d0
-  move.w %d0, (%sp)    | CC and status
-  move.l (%a0, ts_offset_pc), %d0
-  move.l %d0, (%sp, 2) | PC
-  move.l (%a0, ts_offset_sp), %a1
-  move.l %a1, %usp     | SP
-
-  | restore registers
-  movem.l (%a0, ts_offset_d), %d0-%d7/%a0-%a6
-
-  | done, `rte' to execute task, and clear swapping flag
-  clr.b (is_swapping)
-  ret_from_scheduler
+  bra run_task_
 
 | nonfatal, just indicate that there are no more tasks to run
 _no_more_tasks:
@@ -409,8 +321,10 @@ _no_more_tasks:
 
 | fatal error label
 _fatal_no_more_tasks:
+  move.l (mt_time), -(%sp)
   .extern ct_no_more_tasks
   jsr ct_no_more_tasks
+  add.l #4, %sp
   illegal
 
 | subroutine for handling a task returning
@@ -449,6 +363,7 @@ _tr_found_current_task:
   | remove task from in_use_tasks linked list
   move.l (%a2, ts_offset_next), %a1
   move.l %a1, (%a0)
+  subq.b  #1, (num_tasks)
 
   | push onto head of free_tasks linked list
   move.l (free_tasks), %a1
@@ -473,6 +388,82 @@ _tr_fatal_invariant_failure:
   jsr fatal_invariant_failure
   add.l #8, %sp
   illegal
+
+| Handler for when timer D fires. Typically switches contexts if more than
+| one task is currently running, and updates the `mt_time' counter
+on_timer_d:
+
+  | incr timer
+  |enter_scheduler
+  startled_on
+  addq.l #1, (mt_time)
+
+  | atomic check if the CPU is already swapping a task
+  tas (is_swapping)
+  bne _otd_reallyearlyret | early return if we're swapping
+
+  | prevent any other interrupts from happening past this point
+  | not required with the `tas' check, and now better time is kept
+  | cli
+
+  | we'll need these as scratch space
+  movem.l %d0/%a0, -(%sp)
+
+  move.b (num_tasks), %d0
+  cmpi.b #1, %d0
+  beq _otd_earlyret | only one task running, don't bother with a switch
+
+  | find the next task to execute
+  move.l (current_task), %a0
+  btst.b #ts_status_incrit, (%a0, ts_offset_state)
+  bne _otd_earlyret | return if the task is in a critical section
+
+  | nope, use the first task in in_use_tasks. So now, save the context of the
+  | current task. have to restore some registers first.
+  move.l (%sp)+,           (%a0, ts_offset_d)
+  movem.l %d1-%d7/%a0-%a6, (%a0, ts_offset_d+4) | a0 is going to be jumk
+  move.l (%sp)+,           (%a0, ts_offset_a)  | restore old task's a0
+
+  | save flags/pc/sp
+  move.w (%sp),    (%a0, ts_offset_flags) | CC and status flags
+  move.l (%sp, 2), (%a0, ts_offset_pc)    | PC
+  move.l %usp,      %a1                   | SP
+  move.l %a1,      (%a0, ts_offset_sp)
+
+  | alright, context saved, and current task is in %a0
+  | get the next task to run
+  move.l (%a0, ts_offset_next), %a0
+  cmpa.l #0, %a0
+  bne run_task_
+
+  | was at end of in use tasks linked list; go back to front
+  move.l (in_use_tasks), %a0
+
+| loads a task's context and returns into it
+| not a subroutine, should be jumped to directly
+| expects task to switch to in %a0
+run_task_:
+  move.l %a0, (current_task)
+
+  | set up status, pc, and sp regs
+  move.w (%a0, ts_offset_flags), (%sp)    | CC and status
+  move.l (%a0, ts_offset_pc),    (%sp, 2) | PC
+  move.l (%a0, ts_offset_sp), %a1         | SP
+  move.l %a1, %usp
+
+  | restore registers
+  movem.l (%a0, ts_offset_d), %d0-%d7/%a0-%a6
+
+  | done, `rte' to execute task, and clear swapping flag
+  clr.b (is_swapping)
+  ret_from_scheduler
+
+_otd_earlyret:
+  movem.l (%sp)+, %d0/%a0
+  clr.b (is_swapping)
+
+_otd_reallyearlyret:
+  ret_from_scheduler
 
 |.global init_task_states
 init_task_states:
