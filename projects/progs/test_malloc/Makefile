@@ -1,8 +1,5 @@
 # RAM or ROM
-CODE_LOC = ROM
-
-# use multitasking lib
-USE_MULTITASK = 1
+CODE_LOC = RAM
 
 # no optimization
 OPTIMIZE = 0
@@ -11,6 +8,6 @@ OPTIMIZE = 0
 # NO_CORELIB = 1
 
 # Extra libraries
-LIBS = -lhd44780
+LIBS = -lmalloc
 
 include ../../mk/exe.mk

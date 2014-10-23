@@ -202,7 +202,7 @@ abort:;
 
 
 void printf_putc(void*p, char ch) {
-	putc(ch);
+	putc_sync(ch);
 }
 
 void printf(char *fmt, ...)

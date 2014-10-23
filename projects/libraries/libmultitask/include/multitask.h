@@ -31,5 +31,8 @@ void mt_create_task(void (*task_func)());
 void mt_enter_critical();
 void mt_exit_critical();
 
+// callback for when all tasks finish
+void on_done(void (*done)(void));
+
 /* __MULTITASK_H__ */
 #endif

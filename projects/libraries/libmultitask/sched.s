@@ -422,7 +422,7 @@ on_timer_d:
   | current task. have to restore some registers first.
   move.l (%sp)+,           (%a0, ts_offset_d)
   movem.l %d1-%d7/%a0-%a6, (%a0, ts_offset_d+4) | a0 is going to be jumk
-  move.l (%sp)+,           (%a0, ts_offset_a)  | restore old task's a0
+  move.l (%sp)+,           (%a0, ts_offset_a)   | restore old task's a0
 
   | save flags/pc/sp
   move.w (%sp),    (%a0, ts_offset_flags) | CC and status flags
